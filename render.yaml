@@ -11,7 +11,8 @@ services:
           name: market-db
           property: connectionString
       - key: REDIS_URL
-        fromRedis:
+        fromService:
+          type: redis
           name: market-redis
           property: connectionString
       - key: GEMINI_API_KEY
@@ -23,12 +24,13 @@ services:
       - key: PORT
         value: 8000
 
-databases:
-  - name: market-db
+  - type: redis
+    name: market-redis
     plan: free
     region: singapore
+    ipAllowList: []
 
-redis:
-  - name: market-redis
+databases:
+  - name: market-db
     plan: free
     region: singapore
