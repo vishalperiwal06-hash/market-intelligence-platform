@@ -46,3 +46,8 @@ market-intelligence-platform.zip.zip
 response.json
 /EXPORT_TEMP/
 
+
+.vercel
+
+# local deploy scripts with secrets
+/scripts/deploy-vercel.ts

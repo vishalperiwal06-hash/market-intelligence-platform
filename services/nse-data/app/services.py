@@ -501,7 +501,6 @@ class NseMarketService:
 
         import asyncio
 
-        missing_symbols = []
         for symbol in symbols:
             sym_upper = symbol.upper().strip()
             sym_upper = alias_map.get(sym_upper, sym_upper)
@@ -509,64 +508,6 @@ class NseMarketService:
                 quote = dict(bhavcopy_map[sym_upper])
                 quote["symbol"] = symbol.upper().strip()
                 quotes.append(quote)
-            else:
-                missing_symbols.append((symbol, sym_upper))
-
-        if missing_symbols:
-            missing_symbols = missing_symbols[:5]
-            async def fetch_single_missing(original_symbol, sym_upper):
-                try:
-                    import hashlib
-                    from datetime import datetime
-                    current_minute = int(datetime.utcnow().timestamp() / 60)
-                    
-                    h = int(hashlib.md5(sym_upper.encode()).hexdigest(), 16)
-                    close_base = 35.0 + (h % 4965)
-                    
-                    min_str = f"{sym_upper}:{current_minute}"
-                    h_min = int(hashlib.md5(min_str.encode()).hexdigest(), 16)
-                    pct_offset = ((h_min % 200) - 100) / 10000.0
-                    
-                    close = round(close_base * (1.0 + pct_offset), 2)
-                    prev = round(close_base * (1.0 - ((h % 40) - 20) / 1000.0), 2)
-                    change = round(close - prev, 2)
-                    
-                    volume_base = (h % 1500000) + 25000
-                    vol_factor = 0.8 + ((h_min % 40) / 100.0)
-                    volume = int(volume_base * vol_factor)
-                    turnover = round((volume * close) / 100000.0, 2)
-                    
-                    quote = {
-                        "symbol": original_symbol,
-                        "price": close,
-                        "change": change,
-                        "changePercent": round((change / prev * 100), 2) if prev else 0,
-                        "volume": volume,
-                        "turnover": turnover,
-                        "high": round(max(close, prev) * 1.015, 2),
-                        "low": round(min(close, prev) * 0.985, 2),
-                        "open": prev,
-                        "close": prev,
-                        "exchange": "NSE",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "source": "nselib-fallback-seeded",
-                    }
-                    return quote
-                except Exception as exc:
-                    logger.warning(f"Failed to fetch fallback quote for {sym_upper}: {exc}")
-                    return None
-
-            try:
-                tasks = [fetch_single_missing(orig, upper) for orig, upper in missing_symbols]
-                results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=2.0)
-                for q in results:
-                    if q:
-                        quotes.append(q)
-                        kafka_publisher.publish("nse.market.ticks", q["symbol"], q)
-            except asyncio.TimeoutError:
-                logger.warning("Parallel fallback quote fetch timed out after 2.0s; returning available bhavcopy matches.")
-            except Exception as e:
-                logger.error(f"Error fetching parallel fallback quotes: {e}")
 
         return quotes
 
@@ -604,24 +545,7 @@ class NseMarketService:
                     "source": "nselib",
                 }
             )
-        nifty_item = next((item for item in output if "NIFTY 50" in item["symbol"].upper()), None)
-        if nifty_item and not any(item for item in output if "SENSEX" in item["symbol"].upper()):
-            sensex_item = {
-                "symbol": "SENSEX",
-                "price": round(nifty_item["price"] * 3.4, 2),
-                "change": round(nifty_item["change"] * 3.4, 2),
-                "changePercent": nifty_item["changePercent"],
-                "volume": 0,
-                "turnover": 0,
-                "high": round(nifty_item["high"] * 3.4, 2),
-                "low": round(nifty_item["low"] * 3.4, 2),
-                "open": round(nifty_item["open"] * 3.4, 2),
-                "close": round(nifty_item["close"] * 3.4, 2),
-                "exchange": "BSE",
-                "timestamp": nifty_item["timestamp"],
-                "source": "nselib-sensex-proxy",
-            }
-            output.append(sensex_item)
+        pass
 
         return output
 
@@ -646,8 +570,35 @@ class NseFilingsService:
         cache_key = f"nse:filings:{symbol}:{category}:{limit}:{offset}:{search}"
 
         async def load() -> list[dict[str, Any]]:
-            rows = df_to_records(await nselib_client.call(capital_market.event_calendar_for_equity, period="1M"))
-            normalized = [self._normalize(row) for row in rows]
+            from nselib.libutil import nse_urlfetch
+            import json
+            
+            now = datetime.utcnow()
+            days_back = 30 if (symbol or search or category) else 3
+            from_dt = now - timedelta(days=days_back)
+            from_date_str = from_dt.strftime("%d-%m-%Y")
+            to_date_str = now.strftime("%d-%m-%Y")
+            
+            url = f"https://www.nseindia.com/api/corporate-announcements?index=equities&from_date={from_date_str}&to_date={to_date_str}"
+            
+            logger.info(f"Fetching real-time corporate announcements from {url}")
+            try:
+                response = await nselib_client.call(nse_urlfetch, url)
+                if response.status_code == 200:
+                    rows = json.loads(response.content.decode("utf-8"))
+                    normalized = [self._normalize_realtime(row) for row in rows]
+                else:
+                    logger.warning(f"Failed to fetch corporate announcements from NSE (status {response.status_code}); trying event calendar")
+                    event_rows = df_to_records(await nselib_client.call(capital_market.event_calendar_for_equity, period="1M"))
+                    normalized = [self._normalize(row) for row in event_rows]
+            except Exception as e:
+                logger.error(f"Failed to fetch corporate announcements: {e}; trying event calendar fallback")
+                try:
+                    event_rows = df_to_records(await nselib_client.call(capital_market.event_calendar_for_equity, period="1M"))
+                    normalized = [self._normalize(row) for row in event_rows]
+                except Exception:
+                    normalized = []
+            
             if symbol:
                 normalized = [row for row in normalized if row["symbol"] == symbol.upper()]
             if category:
@@ -665,6 +616,38 @@ class NseFilingsService:
             return page
 
         return await cached_json(cache_key, settings.cache_ttl_seconds, load)
+
+    def _normalize_realtime(self, row: dict[str, Any]) -> dict[str, Any]:
+        subject = str(row.get("desc") or row.get("attchmntText") or "Corporate Announcement")
+        details = str(row.get("attchmntText") or subject)
+        symbol = str(row.get("symbol") or "").upper().strip() or "UNKNOWN"
+        company = str(row.get("sm_name") or symbol)
+        
+        an_dt_str = row.get("an_dt")
+        try:
+            event_date = datetime.strptime(an_dt_str, "%d-%b-%Y %H:%M:%S")
+        except Exception:
+            event_date = parse_nse_date(an_dt_str)
+            
+        attachment = row.get("attchmntFile")
+        if attachment and not attachment.startswith("http"):
+            attachment = "https://nsearchives.nseindia.com/corporate/" + attachment.lstrip("/")
+            
+        category = self.classify(subject)
+        
+        return {
+            "exchange": "NSE",
+            "symbol": symbol,
+            "companyName": company,
+            "category": category,
+            "subject": subject,
+            "details": details,
+            "broadcastDate": event_date.isoformat(),
+            "receiptDate": event_date.isoformat(),
+            "pdfUrl": attachment,
+            "attachmentName": str(attachment).split("/")[-1] if attachment else None,
+            "metadata": row,
+        }
 
     def _normalize(self, row: dict[str, Any]) -> dict[str, Any]:
         subject = str(pick(row, "purpose", "subject", "event", "details", default="Corporate Announcement"))
@@ -746,58 +729,8 @@ class NseDerivativesService:
             if not rows:
                 raise ValueError("Empty option chain returned")
         except Exception as exc:
-            logger.warning(f"Failed to fetch live option chain for {symbol}: {exc}. Using high-fidelity fallback chain.")
-            
-            import random
-            random.seed(symbol.upper())
-            rows = []
-            
-            interval = 100
-            if spot_price > 30000:
-                interval = 100
-            elif spot_price > 10000:
-                interval = 100
-            elif spot_price > 1000:
-                interval = 50
-            else:
-                interval = 5
-                
-            base_strike = round(spot_price / interval) * interval
-            strikes = [base_strike + i * interval for i in range(-7, 8)]
-            
-            for strike in strikes:
-                ce_val = max(1.0, (spot_price - strike) + random.uniform(10, 80) if strike < spot_price else random.uniform(2, 40))
-                pe_val = max(1.0, (strike - spot_price) + random.uniform(10, 80) if strike > spot_price else random.uniform(2, 40))
-                
-                ce_oi = int(random.uniform(5000, 80000) / (abs(strike - spot_price)/interval + 1))
-                pe_oi = int(random.uniform(5000, 80000) / (abs(strike - spot_price)/interval + 1))
-                
-                rows.append({
-                    "strike_price": strike,
-                    "strikePrice": strike,
-                    "expiryDate": expiry or "28-May-2026",
-                    "underlying": symbol.upper(),
-                    "CALLS_OI": ce_oi,
-                    "CE_OI": ce_oi,
-                    "CALLS_Chg_in_OI": int(random.uniform(-5000, 15000)),
-                    "CE_CHG_OI": int(random.uniform(-5000, 15000)),
-                    "CALLS_Volume": ce_oi * int(random.uniform(2, 6)),
-                    "CE_VOLUME": ce_oi * int(random.uniform(2, 6)),
-                    "CALLS_LTP": round(ce_val, 2),
-                    "CE_LTP": round(ce_val, 2),
-                    "CALLS_Net_Chg": round(random.uniform(-10, 10), 2),
-                    "CE_CHG": round(random.uniform(-10, 10), 2),
-                    "PUTS_OI": pe_oi,
-                    "PE_OI": pe_oi,
-                    "PUTS_Chg_in_OI": int(random.uniform(-5000, 15000)),
-                    "PE_CHG_OI": int(random.uniform(-5000, 15000)),
-                    "PUTS_Volume": pe_oi * int(random.uniform(2, 6)),
-                    "PE_VOLUME": pe_oi * int(random.uniform(2, 6)),
-                    "PUTS_LTP": round(pe_val, 2),
-                    "PE_LTP": round(pe_val, 2),
-                    "PUTS_Net_Chg": round(random.uniform(-10, 10), 2),
-                    "PE_CHG": round(random.uniform(-10, 10), 2),
-                })
+            logger.error(f"Failed to fetch live option chain for {symbol}: {exc}")
+            raise RuntimeError(f"Live option chain for {symbol} is currently unavailable.")
         
         return self._option_analytics(symbol.upper(), rows, spot_price)
 
@@ -879,38 +812,7 @@ class NseInstitutionalService:
                 if records:
                     return records
             
-            # High-fidelity robust fallback generator for FII/DII activities
-            import random
-            random.seed(42)  # consistent across restarts but dynamic enough
-            records = []
-            current = datetime.utcnow()
-            days_generated = 0
-            while days_generated < 15:
-                if current.weekday() < 5:  # Monday to Friday
-                    date_str = current.strftime("%d-%m-%Y")
-                    # FII flows
-                    buy_fii = round(random.uniform(11000, 16000), 2)
-                    sell_fii = round(random.uniform(10500, 16500), 2)
-                    records.append({
-                        "category": "FII",
-                        "date": date_str,
-                        "buy_value": buy_fii,
-                        "sell_value": sell_fii,
-                        "net_value": round(buy_fii - sell_fii, 2)
-                    })
-                    # DII flows
-                    buy_dii = round(random.uniform(9000, 14000), 2)
-                    sell_dii = round(random.uniform(8500, 13500), 2)
-                    records.append({
-                        "category": "DII",
-                        "date": date_str,
-                        "buy_value": buy_dii,
-                        "sell_value": sell_dii,
-                        "net_value": round(buy_dii - sell_dii, 2)
-                    })
-                    days_generated += 1
-                current -= timedelta(days=1)
-            return records
+            return []
         except Exception as e:
             logger.warning(f"Failed to fetch FII/DII trading activity: {e}")
             return []
@@ -957,34 +859,7 @@ class NseInstitutionalService:
                     if normalized:
                         return normalized
 
-                # High-fidelity robust fallback generator for India VIX
-                import random
-                random.seed(1337)
-                normalized = []
-                current = datetime.utcnow()
-                days_to_generate = 30 if period == "1M" else 90
-                vix_val = 14.2  # start VIX
-                days_generated = 0
-                while days_generated < days_to_generate:
-                    if current.weekday() < 5:  # Monday to Friday
-                        date_str = current.strftime("%Y-%m-%d")
-                        change = random.uniform(-0.6, 0.6)
-                        vix_val = max(9.0, min(35.0, vix_val + change))
-                        open_val = max(9.0, vix_val - random.uniform(-0.3, 0.3))
-                        high_val = max(vix_val, open_val) + random.uniform(0.1, 0.4)
-                        low_val = min(vix_val, open_val) - random.uniform(0.1, 0.4)
-                        normalized.append({
-                            "date": date_str,
-                            "close": round(vix_val, 2),
-                            "open": round(open_val, 2),
-                            "high": round(high_val, 2),
-                            "low": round(low_val, 2),
-                        })
-                        days_generated += 1
-                    current -= timedelta(days=1)
-                # Sort chronological for area chart
-                normalized.sort(key=lambda x: x["date"])
-                return normalized
+                return []
             except Exception as e:
                 logger.warning(f"Failed to fetch India VIX: {e}")
                 return []

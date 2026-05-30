@@ -1,0 +1,9 @@
+{
+  "experimentalServices": {
+    "market-terminal": {
+      "type": "web",
+      "routePrefix": "/",
+      "framework": "nextjs"
+    }
+  }
+}

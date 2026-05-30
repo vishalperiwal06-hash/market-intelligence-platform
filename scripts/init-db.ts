@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { execSync } from 'node:child_process';
 import { client, db } from '../src/lib/db';
 import { sql } from 'drizzle-orm';
@@ -44,13 +45,13 @@ async function main() {
   await waitForDatabase();
   await ensureExtensions();
 
-  execSync('./node_modules/.bin/drizzle-kit push --config drizzle.config.ts --force', {
+  execSync('npx drizzle-kit push --force', {
     stdio: 'inherit',
     env: process.env,
   });
 
   try {
-    execSync('./node_modules/.bin/tsx scripts/migrate-phase19.ts', {
+    execSync('npx tsx scripts/migrate-phase19.ts', {
       stdio: 'inherit',
       env: process.env,
     });
