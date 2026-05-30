@@ -15,12 +15,14 @@ export class CorporateWorker {
     this.isRunning = true;
     logger.info('CorporateWorker', 'Starting corporate intelligence workers');
 
-    // Poll News every 5 minutes
+    // Poll News immediately and then every 5 minutes
+    newsIngestionEngine.pollAllSources().catch(e => logger.error('CorporateWorker', 'Initial news poll failed', e));
     setInterval(() => {
       newsIngestionEngine.pollAllSources().catch(e => logger.error('CorporateWorker', 'News poll failed', e));
     }, 300_000);
 
-    // Poll Filings every 2 minutes
+    // Poll Filings immediately and then every 2 minutes
+    filingsIngestionEngine.pollFilings().catch(e => logger.error('CorporateWorker', 'Initial filings poll failed', e));
     setInterval(() => {
       filingsIngestionEngine.pollFilings().catch(e => logger.error('CorporateWorker', 'Filings poll failed', e));
     }, 120_000);
