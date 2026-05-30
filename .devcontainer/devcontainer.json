@@ -1,0 +1,33 @@
+{
+  "name": "Market Intelligence Platform Codespace",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  "forwardPorts": [3000, 8000, 4000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Market Terminal UI (Live)",
+      "onAutoForward": "openBrowser"
+    },
+    "8000": {
+      "label": "Python NSE Feed Service",
+      "onAutoForward": "ignore"
+    },
+    "4000": {
+      "label": "Background Ingester Logs",
+      "onAutoForward": "ignore"
+    }
+  },
+  "postCreateCommand": "sh .devcontainer/setup.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-docker",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-python.python"
+      ]
+    }
+  }
+}
