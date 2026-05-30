@@ -1,26 +1,496 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, 'Courier New', monospace;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    box-sizing: border-box;
   }
-}
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* =============================================
+     PREMIUM TERMINAL ANIMATIONS
+     ============================================= */
+
+  /* Ticker tape scroll */
+  @keyframes marquee {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  /* Price flash animations */
+  @keyframes flash-up {
+    0% { background-color: rgba(16, 185, 129, 0.4); border-color: rgba(16, 185, 129, 0.8); box-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
+    60% { background-color: rgba(16, 185, 129, 0.15); }
+    100% { background-color: transparent; border-color: transparent; box-shadow: none; }
+  }
+
+  @keyframes flash-down {
+    0% { background-color: rgba(239, 68, 68, 0.4); border-color: rgba(239, 68, 68, 0.8); box-shadow: 0 0 8px rgba(239, 68, 68, 0.3); }
+    60% { background-color: rgba(239, 68, 68, 0.15); }
+    100% { background-color: transparent; border-color: transparent; box-shadow: none; }
+  }
+
+  /* Glow pulse for live indicators */
+  @keyframes glow-pulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(16, 185, 129, 0.6), 0 0 8px rgba(16, 185, 129, 0.3); }
+    50% { box-shadow: 0 0 8px rgba(16, 185, 129, 0.9), 0 0 16px rgba(16, 185, 129, 0.5); }
+  }
+
+  /* Slide in from bottom */
+  @keyframes slide-in-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Slide in from right */
+  @keyframes slide-in-right {
+    from { opacity: 0; transform: translateX(16px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  /* Number counter animation */
+  @keyframes count-up {
+    from { opacity: 0; transform: translateY(6px) scale(0.95); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  /* Shimmer loading effect */
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  /* Bar fill animation */
+  @keyframes bar-fill {
+    from { width: 0%; }
+    to { width: var(--bar-target-width, 100%); }
+  }
+
+  /* Breathing glow for active cards */
+  @keyframes breathe {
+    0%, 100% { border-color: rgba(59, 130, 246, 0.15); }
+    50% { border-color: rgba(59, 130, 246, 0.35); }
+  }
+
+  /* Scan line for terminal effect */
+  @keyframes scan-line {
+    0% { top: -4px; }
+    100% { top: 100%; }
+  }
+
+  /* Data stream particles */
+  @keyframes data-stream {
+    0% { opacity: 0; transform: translateY(-100%); }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { opacity: 0; transform: translateY(100%); }
+  }
+
+  /* Rotation for loading spinners */
+  @keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  /* Bounce for alerts */
+  @keyframes bounce-subtle {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+  }
+
+  /* =============================================
+     ANIMATION UTILITY CLASSES
+     ============================================= */
+
+  .animate-flash-up {
+    animation: flash-up 1.4s cubic-bezier(0.16, 1, 0.3, 1) 1;
+  }
+
+  .animate-flash-down {
+    animation: flash-down 1.4s cubic-bezier(0.16, 1, 0.3, 1) 1;
+  }
+
+  .animate-glow-pulse {
+    animation: glow-pulse 2s ease-in-out infinite;
+  }
+
+  .animate-slide-in-up {
+    animation: slide-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-slide-in-right {
+    animation: slide-in-right 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-count-up {
+    animation: count-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-spin-slow {
+    animation: spin-slow 3s linear infinite;
+  }
+
+  .animate-bounce-subtle {
+    animation: bounce-subtle 1s ease-in-out infinite;
+  }
+
+  .animate-breathe {
+    animation: breathe 3s ease-in-out infinite;
+  }
+
+  /* Staggered children animations */
+  .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+  .stagger-children > *:nth-child(2) { animation-delay: 60ms; }
+  .stagger-children > *:nth-child(3) { animation-delay: 120ms; }
+  .stagger-children > *:nth-child(4) { animation-delay: 180ms; }
+  .stagger-children > *:nth-child(5) { animation-delay: 240ms; }
+  .stagger-children > *:nth-child(6) { animation-delay: 300ms; }
+  .stagger-children > *:nth-child(7) { animation-delay: 360ms; }
+  .stagger-children > *:nth-child(8) { animation-delay: 420ms; }
+  .stagger-children > *:nth-child(9) { animation-delay: 480ms; }
+  .stagger-children > *:nth-child(10) { animation-delay: 540ms; }
+
+  /* Shimmer skeleton */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(39, 39, 42, 0.4) 25%,
+      rgba(63, 63, 70, 0.6) 50%,
+      rgba(39, 39, 42, 0.4) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  /* =============================================
+     TERMINAL DESIGN SYSTEM
+     ============================================= */
+
+  /* Custom border colors */
+  .border-zinc-850 {
+    border-color: rgba(39, 39, 42, 0.7) !important;
+  }
+
+  /* Terminal card glassmorphism */
+  .bg-terminal-card {
+    background: linear-gradient(
+      135deg,
+      rgba(9, 9, 11, 0.92) 0%,
+      rgba(12, 12, 16, 0.88) 100%
+    ) !important;
+    border: 1px solid rgba(39, 39, 42, 0.65) !important;
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  }
+
+  .bg-terminal-card:hover {
+    border-color: rgba(63, 63, 70, 0.8) !important;
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.04), 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Terminal dark background */
+  .bg-terminal-dark {
+    background: radial-gradient(
+      ellipse at 20% 20%,
+      rgba(15, 23, 42, 0.4) 0%,
+      rgba(3, 3, 3, 0.98) 60%
+    ) !important;
+    min-height: 100%;
+  }
+
+  /* Elevated card variant */
+  .card-elevated {
+    background: linear-gradient(135deg, rgba(15, 15, 18, 0.95) 0%, rgba(9, 9, 11, 0.95) 100%);
+    border: 1px solid rgba(63, 63, 70, 0.5);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  /* Glowing blue accent */
+  .accent-glow-blue {
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3), 0 0 16px rgba(59, 130, 246, 0.15);
+  }
+
+  /* Glowing green accent */
+  .accent-glow-green {
+    box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.3), 0 0 16px rgba(16, 185, 129, 0.15);
+  }
+
+  /* Data value number display */
+  .data-value {
+    font-family: 'JetBrains Mono', 'Geist Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+
+  /* Positive change highlight */
+  .change-positive {
+    color: #34d399;
+    text-shadow: 0 0 12px rgba(52, 211, 153, 0.3);
+  }
+
+  /* Negative change highlight */
+  .change-negative {
+    color: #f87171;
+    text-shadow: 0 0 12px rgba(248, 113, 113, 0.3);
+  }
+
+  /* Terminal section headers */
+  .section-header {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(113, 113, 122, 0.8);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Gradient text utility */
+  .text-gradient-blue {
+    background: linear-gradient(135deg, #60a5fa, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-gradient-green {
+    background: linear-gradient(135deg, #34d399, #60a5fa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Live indicator dot */
+  .live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #10b981;
+    animation: glow-pulse 2s ease-in-out infinite;
+  }
+
+  /* Scan line overlay for terminal feel */
+  .terminal-scanline::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.03) 2px,
+      rgba(0, 0, 0, 0.03) 4px
+    );
+    pointer-events: none;
+    border-radius: inherit;
+  }
+
+  /* Heat map cell styles */
+  .heatmap-strong-up { background: rgba(16, 185, 129, 0.35); color: #6ee7b7; }
+  .heatmap-up { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+  .heatmap-slight-up { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+  .heatmap-neutral { background: rgba(39, 39, 42, 0.5); color: #71717a; }
+  .heatmap-slight-down { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+  .heatmap-down { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+  .heatmap-strong-down { background: rgba(239, 68, 68, 0.35); color: #fca5a5; }
+
+  /* Progress bar animations */
+  .progress-bar-animated {
+    transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* Compact table styles */
+  .terminal-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .terminal-table th {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(113, 113, 122, 0.8);
+    padding: 4px 6px;
+    border-bottom: 1px solid rgba(39, 39, 42, 0.7);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .terminal-table th:first-child {
+    text-align: left;
+  }
+
+  .terminal-table td {
+    padding: 3px 6px;
+    border-bottom: 1px solid rgba(39, 39, 42, 0.3);
+    text-align: right;
+    white-space: nowrap;
+    color: rgba(228, 228, 231, 0.9);
+  }
+
+  .terminal-table td:first-child {
+    text-align: left;
+  }
+
+  .terminal-table tr:hover td {
+    background: rgba(39, 39, 42, 0.3);
+  }
+
+  .animate-marquee {
+    animation: marquee 60s linear infinite;
+  }
+
+  .animate-marquee:hover {
+    animation-play-state: paused;
+  }
+
+  /* =============================================
+     HIGH DENSITY SCROLLBAR
+     ============================================= */
+
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgba(4, 4, 5, 0.8);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(39, 39, 42, 0.9);
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(63, 63, 70, 0.9);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }

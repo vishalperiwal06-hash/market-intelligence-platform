@@ -1,0 +1,17 @@
+import {
+  pgTable,
+  text,
+  timestamp,
+  doublePrecision,
+  bigint,
+  uuid,
+  index,
+  integer,
+  boolean,
+  jsonb,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
+
+// ... (previous schema tables) ...
+// We need to keep the old schema tables and append the new ones.
+// I will rewrite the whole file to ensure we don't lose anything.

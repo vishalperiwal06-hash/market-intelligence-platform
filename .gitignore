@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local exports & large data files
+institutional-terminal-full-export.zip
+market-intelligence-platform.zip.zip
+response.json
+/EXPORT_TEMP/
+
