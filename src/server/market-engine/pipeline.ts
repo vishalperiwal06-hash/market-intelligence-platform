@@ -32,9 +32,7 @@ export class MarketPipeline {
   private lastUniverseRefreshAt = 0;
   private lastTickReceivedAt = Date.now();
   private gapDetectorTimer: NodeJS.Timeout | null = null;
-  private simulatedPrices = new Map<string, number>();
-  private simulatedVolumes = new Map<string, number>();
-  private simulatedTurnovers = new Map<string, number>();
+  // Zero-fabrication: no simulated price/volume/turnover state
   private stats = {
     pollCycles: 0,
     ticksIngested: 0,
@@ -181,61 +179,7 @@ export class MarketPipeline {
       return;
     }
 
-    // Apply realistic ticking price, volume, and turnover simulation
-    for (const q of allQuotes) {
-      // 1. Ticking Price
-      let lastPrice = this.simulatedPrices.get(q.symbol);
-      if (!lastPrice || isNaN(lastPrice)) {
-        lastPrice = q.price;
-      }
-      
-      // Random walk: -0.15% to +0.15%
-      const randChange = (Math.random() - 0.5) * 0.003; 
-      let nextPrice = lastPrice * (1 + randChange);
-      
-      // Pull back to actual quote price to prevent infinite drift
-      const deviation = nextPrice - q.price;
-      const maxDeviation = q.price * 0.03; // max 3% deviation
-      if (Math.abs(deviation) > maxDeviation) {
-        nextPrice = q.price + (deviation > 0 ? maxDeviation : -maxDeviation) * 0.8;
-      } else {
-        nextPrice = nextPrice - deviation * 0.1; // 10% gravity pull
-      }
-      
-      nextPrice = Math.round(nextPrice * 100) / 100;
-      if (nextPrice <= 0) nextPrice = q.price;
-      this.simulatedPrices.set(q.symbol, nextPrice);
-      q.price = nextPrice;
-
-      // 2. Ticking Volume (strictly increasing)
-      let lastVolume = this.simulatedVolumes.get(q.symbol);
-      if (!lastVolume || isNaN(lastVolume)) {
-        lastVolume = q.volume || 100000;
-      }
-      const volumeTick = Math.floor(100 + Math.random() * 400); // 100 to 500 shares per cycle
-      const nextVolume = lastVolume + volumeTick;
-      this.simulatedVolumes.set(q.symbol, nextVolume);
-      q.volume = nextVolume;
-
-      // 3. Ticking Turnover (strictly increasing, normalized strictly in Lakhs)
-      let lastTurnover = this.simulatedTurnovers.get(q.symbol);
-      if (!lastTurnover || isNaN(lastTurnover)) {
-        const baseTurnover = q.turnover || (q.volume * q.price);
-        lastTurnover = baseTurnover > 10000000 ? baseTurnover / 100000 : baseTurnover; 
-      }
-      const turnoverTick = (q.price * volumeTick) / 100000; // in Lakhs
-      const nextTurnover = lastTurnover + turnoverTick;
-      this.simulatedTurnovers.set(q.symbol, nextTurnover);
-      q.turnover = Number(nextTurnover.toFixed(2));
-
-      // 4. Align high/low, change and changePercent
-      const closePrice = q.close || q.price * 0.98;
-      q.change = Number((q.price - closePrice).toFixed(2));
-      q.changePercent = Number(((q.change / closePrice) * 100).toFixed(2));
-      
-      if (q.price > q.high) q.high = q.price;
-      if (q.price < q.low) q.low = q.price;
-    }
+    // Zero-fabrication: use exact unaltered quotes from exchange adapters — no random walk simulation
 
     this.lastTickReceivedAt = Date.now();
     this.stats.lastTickReceivedAt = new Date().toISOString();

@@ -22,8 +22,12 @@ export async function GET(request: Request) {
       .slice(0, limit);
 
     if (symbols.length === 0) {
-      // Fallback to high-conviction index heavyweights if DB is not seeded yet
-      symbols = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'SBIN', 'ITC', 'AXISBANK', 'LT', 'BHARTIARTL'];
+      // Zero-fabrication policy: return empty rather than hardcoded index heavyweights
+      return NextResponse.json({
+        ok: true,
+        data: [],
+        meta: { count: 0, source: 'nse-data-service', note: 'No active companies seeded in database yet' },
+      });
     }
 
     const quotes = await nseDataService.quotes(symbols);

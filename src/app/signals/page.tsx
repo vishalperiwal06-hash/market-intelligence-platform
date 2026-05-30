@@ -39,55 +39,8 @@ export default function SignalsPage() {
       });
   }, []);
 
-  // Standard high-conviction signals to display as fallback if database has 0 active scanner records
-  const getFallbackSignals = (): ActiveSignal[] => {
-    return [
-      {
-        id: 'fallback-1',
-        symbol: 'RELIANCE',
-        signalType: 'breakout',
-        signalName: 'Resistance Breakout',
-        direction: 'bullish',
-        timeframe: '15m',
-        confidence: 88,
-        qualityScore: 92,
-        riskScore: 35,
-        priceAtDetection: 2450.45,
-        metadata: { reason: 'Cleared heavy supply zone at 2440 with 3x average volume breakout.' },
-        timestamp: new Date().toISOString(),
-      },
-      {
-        id: 'fallback-2',
-        symbol: 'TCS',
-        signalType: 'momentum',
-        signalName: 'RSI Oversold Reversal',
-        direction: 'bullish',
-        timeframe: '1h',
-        confidence: 84,
-        qualityScore: 87,
-        riskScore: 28,
-        priceAtDetection: 3410.0,
-        metadata: { reason: 'Bullish divergence on RSI-14 at key horizontal demand zone.' },
-        timestamp: new Date().toISOString(),
-      },
-      {
-        id: 'fallback-3',
-        symbol: 'HDFCBANK',
-        signalType: 'volume',
-        signalName: 'High Volume Pullback',
-        direction: 'bullish',
-        timeframe: '1d',
-        confidence: 91,
-        qualityScore: 95,
-        riskScore: 20,
-        priceAtDetection: 1515.2,
-        metadata: { reason: 'Healthy restest of 50-EMA on daily charts with diminishing selling pressure.' },
-        timestamp: new Date().toISOString(),
-      },
-    ];
-  };
-
-  const activeList = signals.length > 0 ? signals : getFallbackSignals();
+  // Zero-fabrication policy: only display authentic exchange-derived signals from the database
+  const activeList = signals;
 
   // Categorize signals
   const intradaySignals = activeList.filter((s) =>

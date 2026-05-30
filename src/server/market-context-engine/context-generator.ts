@@ -1,9 +1,9 @@
 import { db } from '../../lib/db';
 import { 
-  marketRegimes, breadthIntelligence, sectorRotation, 
+  breadthIntelligence, sectorRotation, 
   liquidityFlows, leadershipRankings, volatilityRegimes 
 } from '../../lib/db/schema';
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { logger } from '../../lib/logger';
 import { marketRegimeEngine } from './regime-engine';
 
@@ -55,17 +55,9 @@ export class MarketContextGenerator {
     try {
       regime = await marketRegimeEngine.getActiveRegime();
     } catch (err: any) {
-      logger.warn('MarketContextGenerator', `Regime query failed: ${err.message}. Using high-fidelity mock fallback.`);
+      logger.error('MarketContextGenerator', `Regime query failed: ${err.message}`);
     }
-    if (!regime) {
-      regime = {
-        regimeType: 'RISK_ON',
-        confidenceScore: 0.85,
-        primaryFactors: ['Strong Index Support', 'DII Inflows', 'Global Market Rally'],
-        durationDays: 14,
-      };
-    }
-    
+
     // 2. Breadth (latest)
     let breadth: any = null;
     try {
@@ -75,10 +67,7 @@ export class MarketContextGenerator {
         .limit(1);
       breadth = breadthRes[0];
     } catch (err: any) {
-      logger.warn('MarketContextGenerator', `Breadth query failed: ${err.message}. Using high-fidelity mock fallback.`);
-    }
-    if (!breadth) {
-      breadth = { advances: 1245, declines: 852, newHighs52w: 48, newLows52w: 12, breadthThrustSignal: true };
+      logger.error('MarketContextGenerator', `Breadth query failed: ${err.message}`);
     }
 
     // 3. Sectors
@@ -90,10 +79,7 @@ export class MarketContextGenerator {
         .orderBy(desc(sectorRotation.momentumScore))
         .limit(3);
     } catch (err: any) {
-      logger.warn('MarketContextGenerator', `Leading sectors query failed: ${err.message}. Using high-fidelity mock fallback.`);
-    }
-    if (!leadingSectors || leadingSectors.length === 0) {
-      leadingSectors = [{ name: 'NIFTY IT' }, { name: 'NIFTY PHARMA' }, { name: 'NIFTY AUTO' }];
+      logger.error('MarketContextGenerator', `Leading sectors query failed: ${err.message}`);
     }
       
     let weakeningSectors: any[] = [];
@@ -104,10 +90,7 @@ export class MarketContextGenerator {
         .orderBy(desc(sectorRotation.momentumScore))
         .limit(3);
     } catch (err: any) {
-      logger.warn('MarketContextGenerator', `Weakening sectors query failed: ${err.message}. Using high-fidelity mock fallback.`);
-    }
-    if (!weakeningSectors || weakeningSectors.length === 0) {
-      weakeningSectors = [{ name: 'NIFTY METAL' }, { name: 'NIFTY REALTY' }];
+      logger.error('MarketContextGenerator', `Weakening sectors query failed: ${err.message}`);
     }
 
     // 4. Liquidity
@@ -120,10 +103,7 @@ export class MarketContextGenerator {
         .limit(1);
       liquidity = liquidityRes[0];
     } catch (err: any) {
-      logger.warn('MarketContextGenerator', `Liquidity query failed: ${err.message}. Using high-fidelity mock fallback.`);
-    }
-    if (!liquidity) {
-      liquidity = { turnoverExpansionRatio: 1.25, institutionalAccumulationScore: 0.78 };
+      logger.error('MarketContextGenerator', `Liquidity query failed: ${err.message}`);
     }
 
     // 5. Volatility
@@ -136,10 +116,7 @@ export class MarketContextGenerator {
         .limit(1);
       vol = volRes[0];
     } catch (err: any) {
-      logger.warn('MarketContextGenerator', `Volatility query failed: ${err.message}. Using high-fidelity mock fallback.`);
-    }
-    if (!vol) {
-      vol = { realizedVolatility: 12.4, impliedVolatilityProxy: 13.1, rallyQuality: 'STRONG' };
+      logger.error('MarketContextGenerator', `Volatility query failed: ${err.message}`);
     }
 
     // 6. Leadership
@@ -151,10 +128,7 @@ export class MarketContextGenerator {
         .orderBy(desc(leadershipRankings.leadershipScore))
         .limit(5);
     } catch (err: any) {
-      logger.warn('MarketContextGenerator', `Leadership leaders query failed: ${err.message}. Using high-fidelity mock fallback.`);
-    }
-    if (!leaders || leaders.length === 0) {
-      leaders = [{ symbol: 'RELIANCE' }, { symbol: 'TCS' }, { symbol: 'HDFCBANK' }, { symbol: 'ICICIBANK' }, { symbol: 'INFY' }];
+      logger.error('MarketContextGenerator', `Leadership leaders query failed: ${err.message}`);
     }
 
     let stealth: any[] = [];
@@ -165,39 +139,36 @@ export class MarketContextGenerator {
         .orderBy(desc(leadershipRankings.institutionalQualityScore))
         .limit(5);
     } catch (err: any) {
-      logger.warn('MarketContextGenerator', `Stealth query failed: ${err.message}. Using high-fidelity mock fallback.`);
-    }
-    if (!stealth || stealth.length === 0) {
-      stealth = [{ symbol: 'HAL' }, { symbol: 'BEL' }, { symbol: 'TRENT' }, { symbol: 'MCX' }];
+      logger.error('MarketContextGenerator', `Stealth query failed: ${err.message}`);
     }
 
     return {
-      regime: {
+      regime: regime ? {
         type: regime.regimeType,
         confidence: regime.confidenceScore,
         factors: regime.primaryFactors || [],
         durationDays: regime.durationDays,
-      },
-      breadth: {
+      } : { type: 'UNKNOWN', confidence: 0, factors: [], durationDays: 0 },
+      breadth: breadth ? {
         advances: breadth.advances,
         declines: breadth.declines,
-        newHighs: breadth.newHighs52w !== undefined ? breadth.newHighs52w : 48,
-        newLows: breadth.newLows52w !== undefined ? breadth.newLows52w : 12,
-        thrustSignal: breadth.breadthThrustSignal,
-      },
+        newHighs: breadth.newHighs52w || 0,
+        newLows: breadth.newLows52w || 0,
+        thrustSignal: !!breadth.breadthThrustSignal,
+      } : { advances: 0, declines: 0, newHighs: 0, newLows: 0, thrustSignal: false },
       sectors: {
         leading: leadingSectors.map(s => s.name),
         weakening: weakeningSectors.map(s => s.name),
       },
-      liquidity: {
+      liquidity: liquidity ? {
         turnoverTrend: liquidity.turnoverExpansionRatio > 1.1 ? 'EXPANDING' : (liquidity.turnoverExpansionRatio < 0.9 ? 'CONTRACTING' : 'FLAT'),
-        institutionalAccumulationScore: liquidity.institutionalAccumulationScore,
-      },
-      volatility: {
-        realized: vol.realizedVolatility,
+        institutionalAccumulationScore: liquidity.institutionalAccumulationScore || 0,
+      } : { turnoverTrend: 'NEUTRAL', institutionalAccumulationScore: 0 },
+      volatility: vol ? {
+        realized: vol.realizedVolatility || 0,
         impliedProxy: vol.impliedVolatilityProxy || 0,
-        rallyQuality: vol.rallyQuality || 'CHOPPY',
-      },
+        rallyQuality: vol.rallyQuality || 'NEUTRAL',
+      } : { realized: 0, impliedProxy: 0, rallyQuality: 'NEUTRAL' },
       leadership: {
         trueLeaders: leaders.map(l => l.symbol),
         stealthAccumulation: stealth.map(s => s.symbol),

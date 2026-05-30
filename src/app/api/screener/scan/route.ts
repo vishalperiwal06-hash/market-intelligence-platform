@@ -7,44 +7,6 @@ import { redis } from '@/lib/redis';
 
 export const dynamic = 'force-dynamic';
 
-// ──────────────────────────────────────────────
-// MATHEMATICALLY CALIBRATED DYNAMIC FALLBACK
-// ──────────────────────────────────────────────
-function getFallbackQuote(symbol: string) {
-  const symUpper = symbol.toUpperCase().trim();
-  const currentMinute = Math.floor(Date.now() / 60000);
-  
-  // 1. Base hash and close
-  const hash = crypto.createHash('md5').update(symUpper).digest('hex');
-  const h = BigInt('0x' + hash);
-  const closeBase = Number(BigInt(35) + (h % BigInt(4965)));
-  
-  // 2. Minute-specific hash and dynamic fluctuation
-  const minString = `${symUpper}:${currentMinute}`;
-  const minHash = crypto.createHash('md5').update(minString).digest('hex');
-  const hMin = BigInt('0x' + minHash);
-  const pctOffset = Number((hMin % BigInt(200)) - BigInt(100)) / 10000.0; // +/- 1.0% max fluctuation
-  
-  const close = Math.round(closeBase * (1.0 + pctOffset) * 100) / 100;
-  const prev = Math.round(closeBase * (1.0 - Number((h % BigInt(40)) - BigInt(20)) / 1000.0) * 100) / 100;
-  const change = Math.round((close - prev) * 100) / 100;
-  const changePercent = Math.round((change / prev * 100) * 100) / 100;
-  
-  const volumeBase = Number(h % BigInt(1500000)) + 25000;
-  const volFactor = 0.8 + Number(hMin % BigInt(40)) / 100.0;
-  const volume = Math.floor(volumeBase * volFactor);
-  const turnover = Math.round((volume * close) / 1000.0) / 100.0; // In Lakhs
-  
-  return {
-    close,
-    prev,
-    change,
-    changePercent,
-    volume,
-    turnover,
-    hMin,
-  };
-}
 
 // ──────────────────────────────────────────────
 // PURE TECHNICAL INDICATOR MATH FUNCTIONS
@@ -344,81 +306,6 @@ function getNicheSectorAndIndustry(symbol: string, companyName: string): { secto
   return { sector: 'Infrastructure & Industry', industry: 'Engineering & Capital Goods' };
 }
 
-// ──────────────────────────────────────────────
-// HIGH-FIDELITY TIME-SERIES SYNTHETIC CANDLES
-// ──────────────────────────────────────────────
-function generateSyntheticCandles(symbol: string, timeframe: string, currentPrice: number, length: number = 100): any[] {
-  const symUpper = symbol.toUpperCase().trim();
-  const currentMinute = Math.floor(Date.now() / 60000);
-  
-  const key = `${symUpper}-${timeframe}`;
-  const hash = crypto.createHash('md5').update(key).digest('hex');
-  const seed = BigInt('0x' + hash);
-  
-  const bars: any[] = [];
-  let price = currentPrice;
-  const nowMs = Date.now();
-  
-  let tfMs = 24 * 60 * 60 * 1000; // default 1d
-  const tf = timeframe.toLowerCase();
-  if (tf.includes('5m')) tfMs = 5 * 60 * 1000;
-  else if (tf.includes('15m')) tfMs = 15 * 60 * 1000;
-  else if (tf.includes('30m')) tfMs = 30 * 60 * 1000;
-  else if (tf.includes('1h')) tfMs = 60 * 60 * 1000;
-  else if (tf.includes('4h')) tfMs = 4 * 60 * 60 * 1000;
-  else if (tf.includes('daily') || tf === '1d') tfMs = 24 * 60 * 60 * 1000;
-  else if (tf.includes('weekly') || tf === '1w') tfMs = 7 * 24 * 60 * 60 * 1000;
-  else if (tf.includes('monthly') || tf === '1m') tfMs = 30 * 24 * 60 * 60 * 1000;
-  else if (tf.includes('yearly') || tf === '1y') tfMs = 365 * 24 * 60 * 60 * 1000;
-
-  for (let i = length - 1; i >= 0; i--) {
-    const bucketStart = new Date(nowMs - i * tfMs);
-    
-    // Minute tick correction on the last candle
-    const minTick = (i === 0) ? (Number(BigInt('0x' + crypto.createHash('md5').update(`${symUpper}:${currentMinute}`).digest('hex')) % BigInt(100)) - 50) / 10000 : 0;
-    
-    const idxHash = crypto.createHash('md5').update(`${symUpper}:${timeframe}:${i}`).digest('hex');
-    const idxSeed = BigInt('0x' + idxHash);
-    
-    let tfVolFactor = 0.015; // daily
-    if (tf.includes('5m')) tfVolFactor = 0.002;
-    else if (tf.includes('15m')) tfVolFactor = 0.003;
-    else if (tf.includes('30m')) tfVolFactor = 0.004;
-    else if (tf.includes('1h')) tfVolFactor = 0.006;
-    else if (tf.includes('4h')) tfVolFactor = 0.009;
-    else if (tf.includes('weekly') || tf === '1w') tfVolFactor = 0.035;
-    else if (tf.includes('monthly') || tf === '1m') tfVolFactor = 0.06;
-    else if (tf.includes('yearly') || tf === '1y') tfVolFactor = 0.18;
-    
-    const changePct = ((Number(idxSeed % BigInt(2000)) - 1000) / 1000.0) * tfVolFactor + minTick;
-    
-    const open = price;
-    const close = Math.round(price * (1 + changePct) * 100) / 100;
-    
-    const highLowRange = open * (tfVolFactor * 0.5);
-    const high = Math.round(Math.max(open, close) + (Number(idxSeed % BigInt(100)) / 100.0) * highLowRange * 100) / 100;
-    const low = Math.round(Math.min(open, close) - (Number((idxSeed >> BigInt(8)) % BigInt(100)) / 100.0) * highLowRange * 100) / 100;
-    
-    const volumeBase = Number(seed % BigInt(500000)) + 10000;
-    const volume = Math.floor(volumeBase * (0.5 + (Number(idxSeed % BigInt(100)) / 100.0)));
-    const turnover = Math.round((volume * close) / 1000.0) / 100.0;
-    
-    bars.push({
-      symbol: symUpper,
-      open,
-      high,
-      low,
-      close,
-      volume,
-      turnover,
-      bucketStart,
-    });
-    
-    price = close; // next step
-  }
-  
-  return bars;
-}
 
 // ──────────────────────────────────────────────
 // MAIN SCAN API ROUTE
@@ -604,7 +491,7 @@ export async function GET(request: NextRequest) {
       const symbol = company.symbol.toUpperCase().trim();
       const rawBars = symbolCandlesMap.get(symbol) || [];
 
-      // Dynamic timeframe aggregation
+      // Dynamic timeframe aggregation using genuine exchange candles only
       let bars = rawBars;
       if (aggregationFactor > 1) {
         bars = aggregateCandles(rawBars, aggregationFactor);
@@ -612,72 +499,22 @@ export async function GET(request: NextRequest) {
         bars = aggregateCandlesByCalendarDays(rawBars, calendarDays);
       }
 
-      // Check if candle series is flat or empty
-      const isFlat = bars.length === 0 || bars.every(b => Number(b.close) === Number(bars[0].close));
-      if (isFlat) {
-        // Fallback baseline close price
-        let currentPrice: number;
-        if (bars.length > 0) {
-          currentPrice = Number(bars[bars.length - 1].close);
-        } else {
-          currentPrice = getFallbackQuote(symbol).close;
-        }
-        // Generate high-fidelity dynamic timeframe-specific synthetic candles
-        bars = generateSyntheticCandles(symbol, timeframe, currentPrice, 100);
-      }
-
-      // Seeding baseline hashes
-      const keyString = `${symbol}-${timeframe}`;
-      const tfHash = crypto.createHash('md5').update(keyString).digest();
-      const tfHashInt = tfHash.readUInt32BE(0);
-
-      const symbolHash = crypto.createHash('md5').update(symbol).digest();
-      const symHashInt = symbolHash.readUInt32BE(0);
-
-      const minString = `${symbol}:${currentMinute}`;
-      const minHash = crypto.createHash('md5').update(minString).digest('hex');
-      const hMin = BigInt('0x' + minHash);
-
-      // Determine close price
-      let currentPrice: number;
-      let calculatedFallback = null;
-
-      if (bars.length > 0) {
-        currentPrice = Number(bars[bars.length - 1].close);
-      } else {
-        calculatedFallback = getFallbackQuote(symbol);
-        currentPrice = calculatedFallback.close;
-      }
-
-      let priceForTimeframe = currentPrice;
+      // ZERO-FABRICATION: if no real candles exist, skip this symbol's indicators
+      // — do not generate synthetic candles under any circumstances
       const closes = bars.map(b => Number(b.close));
       const volumes = bars.map(b => Number(b.volume || 0));
+      const currentPrice: number | null = bars.length > 0 ? Number(bars[bars.length - 1].close) : null;
 
-      // ──────────────────────────────────────────────
-      // RSI Calculation (Specific to Timeframe!)
-      // ──────────────────────────────────────────────
+      // RSI — computed from real data only
       let rsi: number | null = null;
       if (closes.length >= 15) {
         const rsiArr = calculateRSI(closes, 14);
         const lastRsi = rsiArr[rsiArr.length - 1];
         rsi = (lastRsi !== undefined && !isNaN(lastRsi)) ? lastRsi : null;
       }
-      if (rsi === null) {
-        const rsiBase = Number(25 + (tfHashInt % 50));
-        const rsiTick = Number(hMin % BigInt(100)) / 10.0 - 5.0; // +/- 5.0 dynamic ticking
-        rsi = Math.min(88, Math.max(12, rsiBase + rsiTick));
-      }
 
-      // ──────────────────────────────────────────────
-      // EMA Calculations (Specific to Timeframe!)
-      // ──────────────────────────────────────────────
-      let ema9: number | null = null;
-      let ema21: number | null = null;
-      let ema50: number | null = null;
-      let ema100: number | null = null;
-      let ema200: number | null = null;
-
-      const calcEma = (period: number) => {
+      // EMA — computed from real data only
+      const calcEma = (period: number): number | null => {
         if (closes.length >= period) {
           const arr = calculateEMA(closes, period);
           const v = arr[arr.length - 1];
@@ -685,136 +522,44 @@ export async function GET(request: NextRequest) {
         }
         return null;
       };
+      const ema9 = calcEma(9);
+      const ema21 = calcEma(21) ?? calcEma(20);
+      const ema50 = calcEma(50);
+      const ema100 = calcEma(100);
+      const ema200 = calcEma(200);
 
-      ema9 = calcEma(9) || priceForTimeframe;
-      ema21 = calcEma(21) || calcEma(20) || priceForTimeframe;
-      ema50 = calcEma(50) || priceForTimeframe;
-      ema100 = calcEma(100) || priceForTimeframe;
-      ema200 = calcEma(200) || priceForTimeframe;
-
-      if (closes.length < 21) {
-        const emaType = tfHashInt % 7; 
-        const emaTick = Number(hMin % BigInt(20)) / 2000.0 - 0.005; // +/- 0.5% dynamic movement
-        if (emaType === 0) {
-          ema9 = priceForTimeframe * (1.015 + emaTick);
-          ema21 = priceForTimeframe * 1.008;
-          ema50 = priceForTimeframe * 0.996;
-          ema100 = priceForTimeframe * 0.985;
-          ema200 = priceForTimeframe * 0.968;
-        } else if (emaType === 1) {
-          ema9 = priceForTimeframe * (1.010 + emaTick);
-          ema21 = priceForTimeframe * 1.003;
-          ema50 = priceForTimeframe * 0.997;
-          ema100 = priceForTimeframe * 0.993;
-          ema200 = priceForTimeframe * 0.990;
-        } else if (emaType === 2) {
-          ema9 = priceForTimeframe * (1.006 + emaTick);
-          ema21 = priceForTimeframe * 1.001;
-          ema50 = priceForTimeframe * 1.003;
-          ema100 = priceForTimeframe * 0.998;
-          ema200 = priceForTimeframe * 0.994;
-        } else if (emaType === 3) {
-          ema9 = priceForTimeframe * (0.985 + emaTick);
-          ema21 = priceForTimeframe * 0.992;
-          ema50 = priceForTimeframe * 1.005;
-          ema100 = priceForTimeframe * 1.016;
-          ema200 = priceForTimeframe * 1.032;
-        } else if (emaType === 4) {
-          ema9 = priceForTimeframe * (0.990 + emaTick);
-          ema21 = priceForTimeframe * 0.996;
-          ema50 = priceForTimeframe * 1.003;
-          ema100 = priceForTimeframe * 1.005;
-          ema200 = priceForTimeframe * 1.008;
-        } else if (emaType === 5) {
-          ema9 = priceForTimeframe * (0.994 + emaTick);
-          ema21 = priceForTimeframe * 0.999;
-          ema50 = priceForTimeframe * 0.997;
-          ema100 = priceForTimeframe * 1.001;
-          ema200 = priceForTimeframe * 1.004;
-        } else {
-          ema9 = priceForTimeframe * (1.001 + emaTick);
-          ema21 = priceForTimeframe * 0.999;
-          ema50 = priceForTimeframe * 1.000;
-          ema100 = priceForTimeframe * 0.998;
-          ema200 = priceForTimeframe * 1.002;
-        }
-      } else {
-        if (ema200 === priceForTimeframe && ema50 !== priceForTimeframe) {
-          ema200 = ema50 * (1 - 0.02);
-        }
-        if (ema100 === priceForTimeframe && ema50 !== priceForTimeframe) {
-          ema100 = ema50 * (1 - 0.01);
-        }
-      }
-
-      // ──────────────────────────────────────────────
-      // MACD Calculations (Specific to Timeframe!)
-      // ──────────────────────────────────────────────
-      let macdLine = null;
-      let macdSignal = null;
-      let macdHistogram = null;
-
+      // MACD — computed from real data only
+      let macdLine: number | null = null;
+      let macdSignal: number | null = null;
+      let macdHistogram: number | null = null;
       if (closes.length >= 35) {
         const macdRes = calculateMACD(closes);
         const ml = macdRes.macdLine[macdRes.macdLine.length - 1];
         const ms = macdRes.signalLine[macdRes.signalLine.length - 1];
         const mh = macdRes.histogram[macdRes.histogram.length - 1];
-
         macdLine = (ml !== undefined && !isNaN(ml)) ? ml : null;
         macdSignal = (ms !== undefined && !isNaN(ms)) ? ms : null;
         macdHistogram = (mh !== undefined && !isNaN(mh)) ? mh : null;
       }
 
-      if (macdLine === null) {
-        const macdTick = Number(hMin % BigInt(40)) / 20.0 - 1.0;
-        macdLine = (priceForTimeframe * 0.002) * (((tfHashInt % 12) - 6) / 6.0) + macdTick * 0.1;
-        macdSignal = macdLine * 0.88;
-        macdHistogram = macdLine - macdSignal;
-      }
-
-      // ──────────────────────────────────────────────
-      // Bollinger Bands Calculations (Specific to Timeframe!)
-      // ──────────────────────────────────────────────
-      let bbMiddle = null;
-      let bbUpper = null;
-      let bbLower = null;
-
+      // Bollinger Bands — computed from real data only
+      let bbMiddle: number | null = null;
+      let bbUpper: number | null = null;
+      let bbLower: number | null = null;
       if (closes.length >= 20) {
         const bbRes = calculateBollingerBands(closes);
         const bbm = bbRes.middle[bbRes.middle.length - 1];
         const bbu = bbRes.upper[bbRes.upper.length - 1];
         const bbl = bbRes.lower[bbRes.lower.length - 1];
-
         bbMiddle = (bbm !== undefined && !isNaN(bbm)) ? bbm : null;
         bbUpper = (bbu !== undefined && !isNaN(bbu)) ? bbu : null;
         bbLower = (bbl !== undefined && !isNaN(bbl)) ? bbl : null;
       }
 
-      if (bbMiddle === null) {
-        bbMiddle = priceForTimeframe;
-        const isSqueezed = (tfHashInt % 8) === 0;
-        const width = isSqueezed ? 0.038 : 0.145;
-        const bbTick = Number(hMin % BigInt(30)) / 1000.0 - 0.015;
-        const relPosition = tfHashInt % 4;
-        if (relPosition === 0) {
-          bbUpper = priceForTimeframe * (1.005 + bbTick);
-          bbLower = priceForTimeframe * (1 - width * 2);
-        } else if (relPosition === 1) {
-          bbLower = priceForTimeframe * (0.995 + bbTick);
-          bbUpper = priceForTimeframe * (1 + width * 2);
-        } else {
-          bbUpper = priceForTimeframe * (1 + width + bbTick);
-          bbLower = priceForTimeframe * (1 - width - bbTick);
-        }
-      }
-
-      // ──────────────────────────────────────────────
-      // Volume Analytics
-      // ──────────────────────────────────────────────
-      const avgVol = bars.length > 0 ? Number(bars[bars.length - 1].volume || 0) : (calculatedFallback ? calculatedFallback.volume : 80000 + (symHashInt % 620000));
+      // Volume Analytics — computed from real data only
+      let avgVol: number | null = bars.length > 0 ? Number(bars[bars.length - 1].volume || 0) : null;
       let volumeSpike = false;
-      let volMultiplier = 1.0;
-
+      let volMultiplier: number | null = null;
       if (volumes.length >= 20) {
         const smaVol = calculateSMA(volumes, 20);
         const lastSmaVol = smaVol[smaVol.length - 1];
@@ -822,27 +567,9 @@ export async function GET(request: NextRequest) {
           volMultiplier = Number((volumes[volumes.length - 1] / lastSmaVol).toFixed(2));
           volumeSpike = volumes[volumes.length - 1] >= lastSmaVol * 2.0;
         }
-      } else {
-        const volSeed = tfHashInt % 9;
-        if (volSeed === 0) {
-          volMultiplier = 12.4;
-          volumeSpike = true;
-        } else if (volSeed === 1) {
-          volMultiplier = 6.2;
-          volumeSpike = true;
-        } else if (volSeed === 2) {
-          volMultiplier = 2.4;
-          volumeSpike = true;
-        } else if (volSeed === 3) {
-          volMultiplier = 1.6;
-          volumeSpike = false;
-        } else if (volSeed === 4) {
-          volMultiplier = 0.12;
-          volumeSpike = false;
-        }
       }
 
-      // Breakouts
+      // Breakouts — computed from real data only
       let breakoutDetected = false;
       let breakoutType: string | null = null;
       if (bars.length >= 21) {
@@ -858,9 +585,6 @@ export async function GET(request: NextRequest) {
           breakoutDetected = true;
           breakoutType = 'support';
         }
-      } else if ((tfHashInt % 14) === 0) {
-        breakoutDetected = true;
-        breakoutType = (tfHashInt % 2 === 0) ? 'resistance' : 'support';
       }
 
       const sectorInfo = getNicheSectorAndIndustry(symbol, company.name || '');
@@ -886,40 +610,33 @@ export async function GET(request: NextRequest) {
         };
       }
 
-      // ──────────────────────────────────────────────
-      // PERSISTENT CATALYST MEMORY DETECTION & PERSISTENCE
-      // ──────────────────────────────────────────────
+      // Persistent catalyst memory detection & persistence
       const rememberedData = rememberedMap.get(symbol);
       let isRemembered = !!rememberedData;
 
-      // Detect and remember new catalysts with volume spikes
-      if (catalyst && (volMultiplier >= 2.0 || volumeSpike)) {
+      if (catalyst && volMultiplier !== null && (volMultiplier >= 2.0 || volumeSpike)) {
         const memoryKey = `screener:remembered:${symbol}`;
-        const dayChangePercent = calculatedFallback
-          ? calculatedFallback.changePercent
-          : (closes.length >= 2 ? ((closes[closes.length - 1] - closes[closes.length - 2]) / closes[closes.length - 2]) * 100 : 0);
-        
+        const dayChangePercent = closes.length >= 2
+          ? ((closes[closes.length - 1] - closes[closes.length - 2]) / closes[closes.length - 2]) * 100
+          : 0;
         const memoryPayload = {
           symbol,
           companyName: company.name,
           catalyst,
           volMultiplier,
-          price: priceForTimeframe,
+          price: currentPrice,
           changePercent: dayChangePercent,
           timestamp: new Date().toISOString(),
           reason: `[Significant Surge] ${catalyst.reason} with ${volMultiplier.toFixed(1)}x Volume Spike!`
         };
-        
         redis.set(memoryKey, JSON.stringify(memoryPayload), 'EX', 86400).catch(err => {
           console.error(`Failed to store catalyst memory for ${symbol}:`, err);
         });
-        
         rememberedMap.set(symbol, memoryPayload);
         isRemembered = true;
       }
 
-      // If we don't have a fresh database catalyst right now, but we have a cached remembered catalyst,
-      // restore it from memory so it continues to be tracked as a catalyst stock!
+      // Restore remembered catalyst from cache if no fresh exchange catalyst
       if (!catalyst && rememberedData) {
         catalyst = rememberedData.catalyst;
       }
@@ -940,9 +657,9 @@ export async function GET(request: NextRequest) {
         ema50,
         ema100,
         ema200,
-        vwap: priceForTimeframe * 1.0005,
-        atr14: priceForTimeframe * 0.018,
-        relativeStrength: (tfHashInt % 20) - 10,
+        vwap: null,       // ZERO-FABRICATION: requires tick data — null when unavailable
+        atr14: null,      // ZERO-FABRICATION: requires ATR from real candles — null when insufficient
+        relativeStrength: null, // ZERO-FABRICATION: requires index comparison — null when unavailable
         volumeSma20: avgVol,
         volumeSpike,
         volMultiplier,
@@ -951,12 +668,13 @@ export async function GET(request: NextRequest) {
         companyName: company.name,
         sector: sectorInfo.sector,
         industry: sectorInfo.industry,
-        marketCap: company.marketCap || (50000 + (symHashInt % 950000)),
+        marketCap: company.marketCap ?? null,
         catalyst,
         remembered: isRemembered,
         rememberedReason: rememberedMap.get(symbol)?.reason || (rememberedData ? rememberedData.reason : null),
       };
     });
+
 
     const responseData = {
       ok: true,
