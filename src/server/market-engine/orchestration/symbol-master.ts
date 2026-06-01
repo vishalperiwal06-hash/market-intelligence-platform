@@ -135,18 +135,22 @@ export class SymbolMaster {
   }
 
   private async loadUniverse(force: boolean): Promise<string[]> {
+    let loadedFromNseService = false;
+
+    // Primary: try NSE data service
     try {
       const records = await nseDataService.universe(force);
-      records.forEach(record => this.register(this.fromNseRecord(record)));
-      this.lastRefreshAt = Date.now();
+      if (records && records.length > 0) {
+        records.forEach(record => this.register(this.fromNseRecord(record)));
+        this.lastRefreshAt = Date.now();
+        loadedFromNseService = true;
 
-      await redis.set('symbol:universe:last_refresh', new Date(this.lastRefreshAt).toISOString(), 'EX', 172800);
-      await redis.set('symbol:universe:count', String(records.length), 'EX', 172800);
+        await redis.set('symbol:universe:last_refresh', new Date(this.lastRefreshAt).toISOString(), 'EX', 172800);
+        await redis.set('symbol:universe:count', String(records.length), 'EX', 172800);
 
-      logger.info('SymbolMaster', 'NSE universe refreshed', { count: records.length });
+        logger.info('SymbolMaster', 'NSE universe refreshed from data service', { count: records.length });
 
-      // Upsert retrieved companies to PostgreSQL in batches of 100
-      if (records.length > 0) {
+        // Upsert retrieved companies to PostgreSQL in batches of 100
         try {
           const values = records
             .filter(record => record.symbol && !record.symbol.includes(' '))
@@ -160,7 +164,6 @@ export class SymbolMaster {
               updatedAt: new Date(),
             }));
 
-          logger.info('SymbolMaster', `Starting upsert of ${values.length} companies to PostgreSQL...`);
           for (let i = 0; i < values.length; i += 100) {
             const batch = values.slice(i, i + 100);
             await db.insert(companies).values(batch)
@@ -181,12 +184,43 @@ export class SymbolMaster {
           logger.error('SymbolMaster', 'Failed to upsert companies to PostgreSQL database', dbErr);
         }
       }
-
-      return this.getAllSymbols();
     } catch (error) {
-      logger.warn('SymbolMaster', 'NSE universe refresh failed; keeping current symbol map', { error });
-      return this.getAllSymbols();
+      logger.warn('SymbolMaster', 'NSE data service universe refresh failed', { error });
     }
+
+    // Fallback: if NSE service failed or returned nothing, load from PostgreSQL
+    if (!loadedFromNseService && this.map.size <= 10) {
+      try {
+        logger.info('SymbolMaster', 'Loading universe from PostgreSQL companies table as fallback...');
+        const dbCompanies = await db.select({
+          symbol: companies.symbol,
+          name: companies.name,
+          sector: companies.sector,
+          industry: companies.industry,
+          exchange: companies.exchange,
+        }).from(companies).where(sql`${companies.isActive} = true`);
+
+        if (dbCompanies.length > 0) {
+          for (const c of dbCompanies) {
+            const symbol = c.symbol.toUpperCase().trim();
+            if (!symbol || symbol.includes(' ')) continue;
+            this.register({
+              unifiedSymbol: symbol,
+              nseSymbol: symbol,
+              yahooSymbol: `${symbol}.NS`,
+              sector: c.sector ?? undefined,
+              industry: c.industry ?? undefined,
+            });
+          }
+          this.lastRefreshAt = Date.now();
+          logger.info('SymbolMaster', `Universe loaded from PostgreSQL fallback`, { count: dbCompanies.length, mapSize: this.map.size });
+        }
+      } catch (dbErr) {
+        logger.error('SymbolMaster', 'PostgreSQL fallback universe load also failed', dbErr);
+      }
+    }
+
+    return this.getAllSymbols();
   }
 
 
