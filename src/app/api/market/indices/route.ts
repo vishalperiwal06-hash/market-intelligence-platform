@@ -49,6 +49,42 @@ export async function GET() {
       }
     }
 
+    // Strategy 2.5: Direct Yahoo Finance fetch for indices (on-demand fallback)
+    if (indices.length === 0) {
+      try {
+        const { default: YahooFinance } = await import('yahoo-finance2');
+        const yahooFinance = new YahooFinance();
+        
+        const targetIndices = ['^NSEI', '^NSEBANK', '^BSESN'];
+        const results = await yahooFinance.quote(targetIndices);
+        const list = Array.isArray(results) ? results : [results];
+        
+        const nameMap: Record<string, string> = {
+          '^NSEI': 'NIFTY 50',
+          '^NSEBANK': 'NIFTY BANK',
+          '^BSESN': 'SENSEX'
+        };
+
+        for (const item of list) {
+          if (item) {
+            indices.push({
+              symbol: nameMap[item.symbol] || item.symbol,
+              price: item.regularMarketPrice || null,
+              change: item.regularMarketChange || 0,
+              changePercent: item.regularMarketChangePercent || 0,
+              timestamp: new Date().toISOString(),
+              source: 'yahoo-direct-indices',
+            });
+          }
+        }
+        if (indices.length > 0) {
+          source = 'yahoo-direct-indices';
+        }
+      } catch (yahooErr) {
+        // Yahoo Finance failed
+      }
+    }
+
     // Filter for key indices
     const targets = ['NIFTY 50', 'NIFTY 55', 'NIFTY BANK', 'SENSEX', 'Nifty 50', 'Nifty Bank', 'NIFTY50', '^NSEI', '^NSEBANK', '^BSESN'];
     const filtered = indices.filter(idx =>

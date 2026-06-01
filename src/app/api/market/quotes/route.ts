@@ -97,6 +97,77 @@ export async function GET(request: Request) {
       }
     }
 
+    // Strategy 2.5: Direct Yahoo Finance fetch (on-demand fallback)
+    if (quotes.length === 0) {
+      try {
+        const { default: YahooFinance } = await import('yahoo-finance2');
+        const yahooFinance = new YahooFinance();
+        
+        // Map symbols to Yahoo-friendly format
+        const yahooSymbolMap = new Map<string, string>();
+        const querySymbols: string[] = [];
+        
+        for (const sym of symbols) {
+          const upperSym = sym.toUpperCase().trim();
+          if (upperSym.startsWith('BSE:')) {
+            const code = upperSym.split(':')[1];
+            if (code) {
+              const yahooSym = `${code}.BO`;
+              yahooSymbolMap.set(yahooSym, sym);
+              querySymbols.push(yahooSym);
+            }
+          } else {
+            const yahooSym = `${upperSym}.NS`;
+            yahooSymbolMap.set(yahooSym, sym);
+            querySymbols.push(yahooSym);
+          }
+        }
+
+        // Fetch in batches of 50
+        const yahooQuotes: any[] = [];
+        const batchSize = 50;
+        for (let i = 0; i < querySymbols.length; i += batchSize) {
+          const batch = querySymbols.slice(i, i + batchSize);
+          try {
+            const results = await yahooFinance.quote(batch);
+            const list = Array.isArray(results) ? results : [results];
+            yahooQuotes.push(...list.filter(Boolean));
+          } catch (batchErr) {
+            // Keep going if a batch fails
+          }
+        }
+
+        if (yahooQuotes.length > 0) {
+          for (const yq of yahooQuotes) {
+            const originalSym = yahooSymbolMap.get(yq.symbol) || yq.symbol.replace('.NS', '').replace('.BO', '');
+            const info = companyLookup.get(originalSym);
+            quotes.push({
+              symbol: originalSym,
+              name: info?.name || originalSym,
+              sector: info?.sector || null,
+              price: yq.regularMarketPrice || null,
+              change: yq.regularMarketChange || 0,
+              changePercent: yq.regularMarketChangePercent || 0,
+              volume: yq.regularMarketVolume || 0,
+              turnover: (yq.regularMarketPrice || 0) * (yq.regularMarketVolume || 0),
+              high: yq.regularMarketDayHigh || yq.regularMarketPrice || null,
+              low: yq.regularMarketDayLow || yq.regularMarketPrice || null,
+              open: yq.regularMarketOpen || yq.regularMarketPrice || null,
+              close: yq.regularMarketPreviousClose || yq.regularMarketPrice || null,
+              exchange: yq.symbol.endsWith('.NS') ? 'NSE' : yq.symbol.endsWith('.BO') ? 'BSE' : 'NSE',
+              timestamp: new Date().toISOString(),
+              source: 'yahoo-direct-fallback',
+            });
+          }
+          if (quotes.length > 0) {
+            source = 'yahoo-direct-fallback';
+          }
+        }
+      } catch (yahooErr) {
+        // Yahoo Finance failed
+      }
+    }
+
     // Strategy 3: Return company list with null prices (zero-fabrication — data not available yet)
     if (quotes.length === 0) {
       quotes = symbols.slice(0, 100).map(sym => {

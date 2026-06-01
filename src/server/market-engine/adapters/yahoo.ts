@@ -25,25 +25,50 @@ export class YahooAdapter implements MarketDataAdapter {
 
     try {
       // Yahoo symbols for Indian stocks usually have .NS or .BO
-      const querySymbols = symbols.map(s => s.endsWith('.NS') || s.endsWith('.BO') ? s : `${s}.NS`);
+      const yahooSymbolMap = new Map<string, string>();
+      const querySymbols = symbols.map(s => {
+        const upper = s.toUpperCase().trim();
+        if (upper.startsWith('^')) {
+          yahooSymbolMap.set(upper, s);
+          return upper;
+        }
+        if (upper.startsWith('BSE:')) {
+          const code = upper.split(':')[1];
+          if (code) {
+            const yahooSym = `${code}.BO`;
+            yahooSymbolMap.set(yahooSym, s);
+            return yahooSym;
+          }
+        }
+        if (upper.endsWith('.NS') || upper.endsWith('.BO')) {
+          yahooSymbolMap.set(upper, s);
+          return upper;
+        }
+        const yahooSym = `${upper}.NS`;
+        yahooSymbolMap.set(yahooSym, s);
+        return yahooSym;
+      });
       
       const results = await yahooFinance.quote(querySymbols);
       const quotes: any[] = Array.isArray(results) ? results : [results];
-
-      return quotes.map(quote => ({
-        symbol: quote.symbol.replace('.NS', '').replace('.BO', ''),
-        price: quote.regularMarketPrice || 0,
-        change: quote.regularMarketChange || 0,
-        changePercent: quote.regularMarketChangePercent || 0,
-        volume: quote.regularMarketVolume || 0,
-        turnover: (quote.regularMarketPrice || 0) * (quote.regularMarketVolume || 0),
-        high: quote.regularMarketDayHigh || 0,
-        low: quote.regularMarketDayLow || 0,
-        open: quote.regularMarketOpen || 0,
-        close: quote.regularMarketPreviousClose || 0,
-        timestamp: new Date().toISOString(),
-        exchange: quote.symbol.endsWith('.NS') ? 'NSE' : quote.symbol.endsWith('.BO') ? 'BSE' : 'UNKNOWN'
-      }));
+ 
+      return quotes.filter(Boolean).map(quote => {
+        const originalSym = yahooSymbolMap.get(quote.symbol) || quote.symbol.replace('.NS', '').replace('.BO', '');
+        return {
+          symbol: originalSym,
+          price: quote.regularMarketPrice || 0,
+          change: quote.regularMarketChange || 0,
+          changePercent: quote.regularMarketChangePercent || 0,
+          volume: quote.regularMarketVolume || 0,
+          turnover: (quote.regularMarketPrice || 0) * (quote.regularMarketVolume || 0),
+          high: quote.regularMarketDayHigh || 0,
+          low: quote.regularMarketDayLow || 0,
+          open: quote.regularMarketOpen || 0,
+          close: quote.regularMarketPreviousClose || 0,
+          timestamp: new Date().toISOString(),
+          exchange: quote.symbol.endsWith('.NS') ? 'NSE' : quote.symbol.endsWith('.BO') ? 'BSE' : 'UNKNOWN'
+        };
+      });
     } catch (error) {
       logger.error('YahooAdapter', 'Failed to fetch quotes', error);
       return [];
