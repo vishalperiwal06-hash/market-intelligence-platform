@@ -310,441 +310,465 @@ function getNicheSectorAndIndustry(symbol: string, companyName: string): { secto
 // ──────────────────────────────────────────────
 // MAIN SCAN API ROUTE
 // ──────────────────────────────────────────────
-export async function GET(request: NextRequest) {
+async function computeScanData(timeframe: string) {
+  // Determine query timeframes and aggregations
+  let queryTimeframe = '1d';
+  let aggregationFactor = 1;
+  let isCalendarAggregation = false;
+  let calendarDays = 1;
+
+  const tf = timeframe.toLowerCase();
+  if (tf === '5m' || tf === '5minutes') {
+    queryTimeframe = '5m';
+  } else if (tf === '15m' || tf === '15minutes') {
+    queryTimeframe = '15m';
+  } else if (tf === '30m' || tf === '30minutes') {
+    queryTimeframe = '15m';
+    aggregationFactor = 2;
+  } else if (tf === '1h' || tf === '1hour') {
+    queryTimeframe = '1h';
+  } else if (tf === '4h' || tf === '4hour') {
+    queryTimeframe = '1h';
+    aggregationFactor = 4;
+  } else if (tf === '1d' || tf === 'daily') {
+    queryTimeframe = '1d';
+  } else if (tf === '1w' || tf === 'weekly') {
+    queryTimeframe = '1d';
+    isCalendarAggregation = true;
+    calendarDays = 7;
+  } else if (tf === '1m' || tf === 'monthly') {
+    queryTimeframe = '1d';
+    isCalendarAggregation = true;
+    calendarDays = 30;
+  } else if (tf === '1y' || tf === 'yearly') {
+    queryTimeframe = '1d';
+    isCalendarAggregation = true;
+    calendarDays = 365;
+  }
+
+  // Curated Nifty 100/Highly active symbols
+  const curatedActiveSymbols = [
+    'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK',
+    'LT', 'BAJFINANCE', 'ASIANPAINT', 'AXISBANK', 'MARUTI', 'HCLTECH', 'WIPRO', 'TITAN', 'SUNPHARMA', 'ULTRACEMCO',
+    'TECHM', 'BAJAJFINSV', 'POWERGRID', 'NTPC', 'ONGC', 'M&M', 'JSWSTEEL', 'TATAMOTORS', 'TATASTEEL', 'ADANIENT',
+    'ADANIPORTS', 'ADANIPOWER', 'ADANIGREEN', 'COALINDIA', 'DIVISLAB', 'DRREDDY', 'CIPLA', 'BPCL', 'HEROMOTOCO', 'GRASIM',
+    'APOLLOHOSP', 'TATACONSUM', 'EICHERMOT', 'INDUSINDBK', 'NESTLEIND', 'BRITANNIA', 'SHREECEM', 'HINDALCO', 'HAL', 'BEL',
+    'TRENT', 'MCX', 'ZOMATO', 'DMART', 'PNB', 'BANKBARODA', 'IOC', 'IRFC', 'RVNL', 'IREDA', 'PFC',
+    'REC', 'YESBANK', 'IDFCFIRSTB', 'BANDHANBNK', 'LICI', 'VEDL', 'TVSMOTOR', 'ASHOKLEY', 'DABUR', 'MARICO',
+    'COLPAL', 'POLYCAB', 'HAVELLS', 'SUZLON', 'JIOFIN', 'AWFIS', 'TATACOMM', 'IDEA', 'GAIL', 'SAIL',
+    'NHPC', 'NMDC', 'IRCTC', 'UNIONBANK', 'CANBK', 'OBEROIRLTY', 'DLF', 'PRESTIGE', 'NYKAA', 'PAYTM', 'MUTHOOTFIN'
+  ];
+
+  // Fetch active companies first to construct active symbols filter
+  const dbCompanies = await db.select({
+    symbol: companies.symbol,
+    name: companies.name,
+    sector: companies.sector,
+    industry: companies.industry,
+    marketCap: companies.marketCap,
+  })
+  .from(companies)
+  .where(eq(companies.isActive, true));
+
+  const companyLookup = new Map<string, typeof dbCompanies[0]>();
+  for (const c of dbCompanies) {
+    companyLookup.set(c.symbol.toUpperCase().trim(), c);
+  }
+
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  // Fetch filings and news in parallel
+  const [filingsRes, newsRes] = await Promise.all([
+    db.select({
+      symbol: corporateFilings.symbol,
+      category: corporateFilings.category,
+      subject: corporateFilings.subject,
+      broadcastDate: corporateFilings.broadcastDate,
+    })
+    .from(corporateFilings)
+    .where(gte(corporateFilings.broadcastDate, oneDayAgo)),
+
+    db.select({
+      title: newsArticles.title,
+      symbols: newsArticles.symbols,
+      pubDate: newsArticles.pubDate,
+    })
+    .from(newsArticles)
+    .where(gte(newsArticles.pubDate, oneDayAgo))
+  ]);
+
+  const recentFilings = filingsRes;
+  const recentNews = newsRes;
+
+  // Direct Yahoo Finance chart fetch in parallel batches of 20
+  const { default: YahooFinance } = await import('yahoo-finance2');
+  const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
+
+  const yahooInterval: '5m' | '15m' | '1h' | '1d' = 
+    queryTimeframe === '5m' ? '5m' :
+    queryTimeframe === '15m' ? '15m' :
+    queryTimeframe === '1h' ? '1h' : '1d';
+
+  let lookbackDays = 180;
+  if (yahooInterval === '5m') lookbackDays = 4;
+  else if (yahooInterval === '15m') lookbackDays = 10;
+  else if (yahooInterval === '1h') lookbackDays = 30;
+
+  const today = new Date();
+  const period1Date = new Date();
+  period1Date.setDate(today.getDate() - lookbackDays);
+  const period1 = period1Date.toISOString().split('T')[0];
+  const period2 = today.toISOString().split('T')[0];
+
+  const symbolCandlesMap = new Map<string, any[]>();
+  const batchSize = 20;
+
+  for (let i = 0; i < curatedActiveSymbols.length; i += batchSize) {
+    const batch = curatedActiveSymbols.slice(i, i + batchSize);
+    await Promise.all(batch.map(async (sym) => {
+      try {
+        const results = await yahooFinance.chart(`${sym}.NS`, {
+          period1,
+          period2,
+          interval: yahooInterval,
+        });
+        if (results && results.quotes && results.quotes.length > 0) {
+          const bars = results.quotes
+            .filter((q: any) => q && q.close != null)
+            .map((q: any) => ({
+              symbol: sym,
+              open: q.open,
+              high: q.high,
+              low: q.low,
+              close: q.close,
+              volume: q.volume || 0,
+              turnover: (q.close || 0) * (q.volume || 0),
+              bucketStart: new Date(q.date)
+            }));
+          symbolCandlesMap.set(sym, bars);
+        }
+      } catch (err) {
+        // Ignore failures for individual symbols
+      }
+    }));
+  }
+
+  const cleanCompanies = curatedActiveSymbols.map(sym => {
+    const dbInfo = companyLookup.get(sym);
+    return {
+      symbol: sym,
+      name: dbInfo?.name || sym,
+      sector: dbInfo?.sector || null,
+      industry: dbInfo?.industry || null,
+      marketCap: dbInfo?.marketCap || null,
+    };
+  });
+
+  // Map recent news by symbol for fast O(1) lookup
+  const newsSymbolMap = new Map<string, any>();
+  recentNews.forEach(n => {
+    if (n.symbols && Array.isArray(n.symbols)) {
+      n.symbols.forEach((sym: any) => {
+        const symStr = String(sym).toUpperCase().trim();
+        if (symStr) {
+          newsSymbolMap.set(symStr, n);
+        }
+      });
+    }
+  });
+
+  // Map recent filings by symbol for fast O(1) lookup
+  const filingsSymbolMap = new Map<string, any>();
+  recentFilings.forEach(f => {
+    const symStr = f.symbol.toUpperCase().trim();
+    if (symStr) {
+      filingsSymbolMap.set(symStr, f);
+    }
+  });
+
+  // Fetch all currently remembered catalyst stocks from Redis
+  const rememberedMap = new Map<string, any>();
+  try {
+    const keys = await redis.keys('screener:remembered:*');
+    if (keys.length > 0) {
+      const values = await redis.mget(...keys);
+      keys.forEach((key, idx) => {
+        const sym = key.replace('screener:remembered:', '');
+        const val = values[idx];
+        if (val) {
+          try {
+            rememberedMap.set(sym, JSON.parse(val));
+          } catch (e) {}
+        }
+      });
+    }
+  } catch (e) {
+    console.warn('Failed to fetch remembered catalyst stocks from Redis:', e);
+  }
+
   const now = new Date();
+
+  // Compute technical indicators in memory!
+  const mergedRows = cleanCompanies.map((company) => {
+    const symbol = company.symbol.toUpperCase().trim();
+    const rawBars = symbolCandlesMap.get(symbol) || [];
+
+    // Dynamic timeframe aggregation using genuine exchange candles only
+    let bars = rawBars;
+    if (aggregationFactor > 1) {
+      bars = aggregateCandles(rawBars, aggregationFactor);
+    } else if (isCalendarAggregation) {
+      bars = aggregateCandlesByCalendarDays(rawBars, calendarDays);
+    }
+
+    // ZERO-FABRICATION: if no real candles exist, skip this symbol's indicators
+    const closes = bars.map(b => Number(b.close));
+    const volumes = bars.map(b => Number(b.volume || 0));
+    const currentPrice: number | null = bars.length > 0 ? Number(bars[bars.length - 1].close) : null;
+
+    // RSI — computed from real data only
+    let rsi: number | null = null;
+    if (closes.length >= 15) {
+      const rsiArr = calculateRSI(closes, 14);
+      const lastRsi = rsiArr[rsiArr.length - 1];
+      rsi = (lastRsi !== undefined && !isNaN(lastRsi)) ? lastRsi : null;
+    }
+
+    // EMA — computed from real data only
+    const calcEma = (period: number): number | null => {
+      if (closes.length >= period) {
+        const arr = calculateEMA(closes, period);
+        const v = arr[arr.length - 1];
+        return (v !== undefined && !isNaN(v)) ? v : null;
+      }
+      return null;
+    };
+    const ema9 = calcEma(9);
+    const ema21 = calcEma(21) ?? calcEma(20);
+    const ema50 = calcEma(50);
+    const ema100 = calcEma(100);
+    const ema200 = calcEma(200);
+
+    // MACD — computed from real data only
+    let macdLine: number | null = null;
+    let macdSignal: number | null = null;
+    let macdHistogram: number | null = null;
+    if (closes.length >= 35) {
+      const macdRes = calculateMACD(closes);
+      const ml = macdRes.macdLine[macdRes.macdLine.length - 1];
+      const ms = macdRes.signalLine[macdRes.signalLine.length - 1];
+      const mh = macdRes.histogram[macdRes.histogram.length - 1];
+      macdLine = (ml !== undefined && !isNaN(ml)) ? ml : null;
+      macdSignal = (ms !== undefined && !isNaN(ms)) ? ms : null;
+      macdHistogram = (mh !== undefined && !isNaN(mh)) ? mh : null;
+    }
+
+    // Bollinger Bands — computed from real data only
+    let bbMiddle: number | null = null;
+    let bbUpper: number | null = null;
+    let bbLower: number | null = null;
+    if (closes.length >= 20) {
+      const bbRes = calculateBollingerBands(closes);
+      const bbm = bbRes.middle[bbRes.middle.length - 1];
+      const bbu = bbRes.upper[bbRes.upper.length - 1];
+      const bbl = bbRes.lower[bbRes.lower.length - 1];
+      bbMiddle = (bbm !== undefined && !isNaN(bbm)) ? bbm : null;
+      bbUpper = (bbu !== undefined && !isNaN(bbu)) ? bbu : null;
+      bbLower = (bbl !== undefined && !isNaN(bbl)) ? bbl : null;
+    }
+
+    // Volume Analytics — computed from real data only
+    let avgVol: number | null = bars.length > 0 ? Number(bars[bars.length - 1].volume || 0) : null;
+    let volumeSpike = false;
+    let volMultiplier: number | null = null;
+    if (volumes.length >= 20) {
+      const smaVol = calculateSMA(volumes, 20);
+      const lastSmaVol = smaVol[smaVol.length - 1];
+      if (lastSmaVol > 0) {
+        volMultiplier = Number((volumes[volumes.length - 1] / lastSmaVol).toFixed(2));
+        volumeSpike = volumes[volumes.length - 1] >= lastSmaVol * 2.0;
+      }
+    }
+
+    // Breakouts — computed from real data only
+    let breakoutDetected = false;
+    let breakoutType: string | null = null;
+    if (bars.length >= 21) {
+      const lookbackBars = bars.slice(-21);
+      const window = lookbackBars.slice(0, 20);
+      const current = lookbackBars[20];
+      const highestHigh = Math.max(...window.map(b => Number(b.high)));
+      const lowestLow = Math.min(...window.map(b => Number(b.low)));
+      if (Number(current.close) > highestHigh) {
+        breakoutDetected = true;
+        breakoutType = 'resistance';
+      } else if (Number(current.close) < lowestLow) {
+        breakoutDetected = true;
+        breakoutType = 'support';
+      }
+    }
+
+    const sectorInfo = getNicheSectorAndIndustry(symbol, company.name || '');
+
+    // Match real-time corporate action or news catalyst
+    const filing = filingsSymbolMap.get(symbol);
+    const newsItem = newsSymbolMap.get(symbol);
+    let catalyst = null;
+
+    if (filing) {
+      catalyst = {
+        type: 'filing',
+        reason: `${filing.category}: ${filing.subject.slice(0, 75)}${filing.subject.length > 75 ? '...' : ''}`,
+        title: filing.subject,
+        date: filing.broadcastDate.toISOString()
+      };
+    } else if (newsItem) {
+      catalyst = {
+        type: 'news',
+        reason: `${newsItem.title.slice(0, 80)}${newsItem.title.length > 80 ? '...' : ''}`,
+        title: newsItem.title,
+        date: newsItem.pubDate.toISOString()
+      };
+    }
+
+    // Persistent catalyst memory detection & persistence
+    const rememberedData = rememberedMap.get(symbol);
+    let isRemembered = !!rememberedData;
+
+    if (catalyst && volMultiplier !== null && (volMultiplier >= 2.0 || volumeSpike)) {
+      const memoryKey = `screener:remembered:${symbol}`;
+      const dayChangePercent = closes.length >= 2
+        ? ((closes[closes.length - 1] - closes[closes.length - 2]) / closes[closes.length - 2]) * 100
+        : 0;
+      const memoryPayload = {
+        symbol,
+        companyName: company.name,
+        catalyst,
+        volMultiplier,
+        price: currentPrice,
+        changePercent: dayChangePercent,
+        timestamp: new Date().toISOString(),
+        reason: `[Significant Surge] ${catalyst.reason} with ${volMultiplier.toFixed(1)}x Volume Spike!`
+      };
+      redis.set(memoryKey, JSON.stringify(memoryPayload), 'EX', 86400).catch(err => {
+        console.error(`Failed to store catalyst memory for ${symbol}:`, err);
+      });
+      rememberedMap.set(symbol, memoryPayload);
+      isRemembered = true;
+    }
+
+    // Restore remembered catalyst from cache if no fresh exchange catalyst
+    if (!catalyst && rememberedData) {
+      catalyst = rememberedData.catalyst;
+    }
+
+    const dayChangePercent = (closes.length >= 2 && closes[closes.length - 2] > 0)
+      ? Number((((closes[closes.length - 1] - closes[closes.length - 2]) / closes[closes.length - 2]) * 100).toFixed(2))
+      : null;
+
+    return {
+      symbol,
+      timeframe,
+      timestamp: bars.length > 0 ? bars[bars.length - 1].bucketStart.toISOString() : now.toISOString(),
+      price: currentPrice,
+      changePercent: dayChangePercent,
+      rsi14: rsi,
+      macdLine,
+      macdSignal,
+      macdHistogram,
+      bbUpper,
+      bbMiddle,
+      bbLower,
+      ema9,
+      ema21,
+      ema50,
+      ema100,
+      ema200,
+      vwap: null,       // ZERO-FABRICATION
+      atr14: null,      // ZERO-FABRICATION
+      relativeStrength: null, // ZERO-FABRICATION
+      volumeSma20: avgVol,
+      volumeSpike,
+      volMultiplier,
+      breakoutDetected,
+      breakoutType,
+      companyName: company.name,
+      sector: sectorInfo.sector,
+      industry: sectorInfo.industry,
+      marketCap: company.marketCap ?? null,
+      catalyst,
+      remembered: isRemembered,
+      rememberedReason: rememberedMap.get(symbol)?.reason || (rememberedData ? rememberedData.reason : null),
+    };
+  });
+
+  // Sort merged rows so that active technical set-ups appear first
+  mergedRows.sort((a, b) => {
+    // 1. Remembered / Catalyst stocks first
+    const aHasCatalyst = a.remembered || a.catalyst ? 1 : 0;
+    const bHasCatalyst = b.remembered || b.catalyst ? 1 : 0;
+    if (aHasCatalyst !== bHasCatalyst) return bHasCatalyst - aHasCatalyst;
+
+    // 2. Active breakout detected next
+    const aBreakout = a.breakoutDetected ? 1 : 0;
+    const bBreakout = b.breakoutDetected ? 1 : 0;
+    if (aBreakout !== bBreakout) return bBreakout - aBreakout;
+
+    // 3. Sort by volume multiplier descending (highest volume surges first)
+    const aVol = a.volMultiplier ?? 0;
+    const bVol = b.volMultiplier ?? 0;
+    if (Math.abs(aVol - bVol) > 0.01) return bVol - aVol;
+
+    // 4. Default to market cap descending
+    const aCap = a.marketCap ?? 0;
+    const bCap = b.marketCap ?? 0;
+    return bCap - aCap;
+  });
+
+  return {
+    ok: true,
+    data: mergedRows,
+    remembered: Array.from(rememberedMap.values()),
+    meta: {
+      count: mergedRows.length,
+      timeframe,
+      requestedTimeframe: timeframe,
+      engine: 'High-Fidelity Dynamic Timeframe SWR In-Memory Ingestion Engine',
+      generatedAt: new Date().toISOString()
+    }
+  };
+}
+
+export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const timeframe = searchParams.get('timeframe') || '1d';
+    const cacheKey = `screener:scan:${timeframe}`;
 
     // Redis Cache lookup
-    const cacheKey = `screener:scan:${timeframe}`;
     try {
       const cached = await redis.get(cacheKey);
       if (cached) {
-        return NextResponse.json(JSON.parse(cached));
+        const cachedData = JSON.parse(cached);
+        const generatedAt = cachedData.meta?.generatedAt ? new Date(cachedData.meta.generatedAt).getTime() : 0;
+        
+        // SWR: If older than 3 minutes, run background refresh silently
+        if (Date.now() - generatedAt > 3 * 60 * 1000) {
+          computeScanData(timeframe).then(async (freshData) => {
+            await redis.set(cacheKey, JSON.stringify(freshData), 'EX', 43200);
+          }).catch(err => {
+            console.error('[SWR Background revalidation failed]:', err);
+          });
+        }
+        
+        return NextResponse.json(cachedData);
       }
     } catch (e) {}
 
-    // Determine query timeframes and aggregations
-    let queryTimeframe = '1d';
-    let aggregationFactor = 1;
-    let isCalendarAggregation = false;
-    let calendarDays = 1;
-
-    const tf = timeframe.toLowerCase();
-    if (tf === '5m' || tf === '5minutes') {
-      queryTimeframe = '5m';
-    } else if (tf === '15m' || tf === '15minutes') {
-      queryTimeframe = '15m';
-    } else if (tf === '30m' || tf === '30minutes') {
-      queryTimeframe = '15m';
-      aggregationFactor = 2;
-    } else if (tf === '1h' || tf === '1hour') {
-      queryTimeframe = '1h';
-    } else if (tf === '4h' || tf === '4hour') {
-      queryTimeframe = '1h';
-      aggregationFactor = 4;
-    } else if (tf === '1d' || tf === 'daily') {
-      queryTimeframe = '1d';
-    } else if (tf === '1w' || tf === 'weekly') {
-      queryTimeframe = '1d';
-      isCalendarAggregation = true;
-      calendarDays = 7;
-    } else if (tf === '1m' || tf === 'monthly') {
-      queryTimeframe = '1d';
-      isCalendarAggregation = true;
-      calendarDays = 30;
-    } else if (tf === '1y' || tf === 'yearly') {
-      queryTimeframe = '1d';
-      isCalendarAggregation = true;
-      calendarDays = 365;
-    }
-
-    // Curated Nifty 100/Highly active symbols
-    const curatedActiveSymbols = [
-      'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK',
-      'LT', 'BAJFINANCE', 'ASIANPAINT', 'AXISBANK', 'MARUTI', 'HCLTECH', 'WIPRO', 'TITAN', 'SUNPHARMA', 'ULTRACEMCO',
-      'TECHM', 'BAJAJFINSV', 'POWERGRID', 'NTPC', 'ONGC', 'M&M', 'JSWSTEEL', 'TATAMOTORS', 'TATASTEEL', 'ADANIENT',
-      'ADANIPORTS', 'ADANIPOWER', 'ADANIGREEN', 'COALINDIA', 'DIVISLAB', 'DRREDDY', 'CIPLA', 'BPCL', 'HEROMOTOCO', 'GRASIM',
-      'APOLLOHOSP', 'TATACONSUM', 'EICHERMOT', 'INDUSINDBK', 'NESTLEIND', 'BRITANNIA', 'SHREECEM', 'HINDALCO', 'HAL', 'BEL',
-      'TRENT', 'MCX', 'ZOMATO', 'DMART', 'PNB', 'BANKBARODA', 'IOC', 'IRFC', 'RVNL', 'IREDA', 'PFC',
-      'REC', 'YESBANK', 'IDFCFIRSTB', 'BANDHANBNK', 'LICI', 'VEDL', 'TVSMOTOR', 'ASHOKLEY', 'DABUR', 'MARICO',
-      'COLPAL', 'POLYCAB', 'HAVELLS', 'SUZLON', 'JIOFIN', 'AWFIS', 'TATACOMM', 'IDEA', 'GAIL', 'SAIL',
-      'NHPC', 'NMDC', 'IRCTC', 'UNIONBANK', 'CANBK', 'OBEROIRLTY', 'DLF', 'PRESTIGE', 'NYKAA', 'PAYTM', 'MUTHOOTFIN'
-    ];
-
-    // Fetch active companies first to construct active symbols filter
-    const dbCompanies = await db.select({
-      symbol: companies.symbol,
-      name: companies.name,
-      sector: companies.sector,
-      industry: companies.industry,
-      marketCap: companies.marketCap,
-    })
-    .from(companies)
-    .where(eq(companies.isActive, true));
-
-    const companyLookup = new Map<string, typeof dbCompanies[0]>();
-    for (const c of dbCompanies) {
-      companyLookup.set(c.symbol.toUpperCase().trim(), c);
-    }
-
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-    // Fetch filings and news in parallel
-    const [filingsRes, newsRes] = await Promise.all([
-      db.select({
-        symbol: corporateFilings.symbol,
-        category: corporateFilings.category,
-        subject: corporateFilings.subject,
-        broadcastDate: corporateFilings.broadcastDate,
-      })
-      .from(corporateFilings)
-      .where(gte(corporateFilings.broadcastDate, oneDayAgo)),
-
-      db.select({
-        title: newsArticles.title,
-        symbols: newsArticles.symbols,
-        pubDate: newsArticles.pubDate,
-      })
-      .from(newsArticles)
-      .where(gte(newsArticles.pubDate, oneDayAgo))
-    ]);
-
-    const recentFilings = filingsRes;
-    const recentNews = newsRes;
-
-    // Direct Yahoo Finance chart fetch in parallel batches of 20
-    const { default: YahooFinance } = await import('yahoo-finance2');
-    const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
-
-    const yahooInterval: '5m' | '15m' | '1h' | '1d' = 
-      queryTimeframe === '5m' ? '5m' :
-      queryTimeframe === '15m' ? '15m' :
-      queryTimeframe === '1h' ? '1h' : '1d';
-
-    let lookbackDays = 180;
-    if (yahooInterval === '5m') lookbackDays = 4;
-    else if (yahooInterval === '15m') lookbackDays = 10;
-    else if (yahooInterval === '1h') lookbackDays = 30;
-
-    const today = new Date();
-    const period1Date = new Date();
-    period1Date.setDate(today.getDate() - lookbackDays);
-    const period1 = period1Date.toISOString().split('T')[0];
-    const period2 = today.toISOString().split('T')[0];
-
-    const symbolCandlesMap = new Map<string, any[]>();
-    const batchSize = 20;
-
-    for (let i = 0; i < curatedActiveSymbols.length; i += batchSize) {
-      const batch = curatedActiveSymbols.slice(i, i + batchSize);
-      await Promise.all(batch.map(async (sym) => {
-        try {
-          const results = await yahooFinance.chart(`${sym}.NS`, {
-            period1,
-            period2,
-            interval: yahooInterval,
-          });
-          if (results && results.quotes && results.quotes.length > 0) {
-            const bars = results.quotes
-              .filter((q: any) => q && q.close != null)
-              .map((q: any) => ({
-                symbol: sym,
-                open: q.open,
-                high: q.high,
-                low: q.low,
-                close: q.close,
-                volume: q.volume || 0,
-                turnover: (q.close || 0) * (q.volume || 0),
-                bucketStart: new Date(q.date)
-              }));
-            symbolCandlesMap.set(sym, bars);
-          }
-        } catch (err) {
-          // Ignore failures for individual symbols
-        }
-      }));
-    }
-
-    const cleanCompanies = curatedActiveSymbols.map(sym => {
-      const dbInfo = companyLookup.get(sym);
-      return {
-        symbol: sym,
-        name: dbInfo?.name || sym,
-        sector: dbInfo?.sector || null,
-        industry: dbInfo?.industry || null,
-        marketCap: dbInfo?.marketCap || null,
-      };
-    });
-
-    // Map recent news by symbol for fast O(1) lookup
-    const newsSymbolMap = new Map<string, any>();
-    recentNews.forEach(n => {
-      if (n.symbols && Array.isArray(n.symbols)) {
-        n.symbols.forEach((sym: any) => {
-          const symStr = String(sym).toUpperCase().trim();
-          if (symStr) {
-            newsSymbolMap.set(symStr, n);
-          }
-        });
-      }
-    });
-
-    // Map recent filings by symbol for fast O(1) lookup
-    const filingsSymbolMap = new Map<string, any>();
-    recentFilings.forEach(f => {
-      const symStr = f.symbol.toUpperCase().trim();
-      if (symStr) {
-        filingsSymbolMap.set(symStr, f);
-      }
-    });
-
-    // Fetch all currently remembered catalyst stocks from Redis
-    const rememberedMap = new Map<string, any>();
-    try {
-      const keys = await redis.keys('screener:remembered:*');
-      if (keys.length > 0) {
-        const values = await redis.mget(...keys);
-        keys.forEach((key, idx) => {
-          const sym = key.replace('screener:remembered:', '');
-          const val = values[idx];
-          if (val) {
-            try {
-              rememberedMap.set(sym, JSON.parse(val));
-            } catch (e) {}
-          }
-        });
-      }
-    } catch (e) {
-      console.warn('Failed to fetch remembered catalyst stocks from Redis:', e);
-    }
-
-    // Compute technical indicators in memory!
-    const mergedRows = cleanCompanies.map((company) => {
-      const symbol = company.symbol.toUpperCase().trim();
-      const rawBars = symbolCandlesMap.get(symbol) || [];
-
-      // Dynamic timeframe aggregation using genuine exchange candles only
-      let bars = rawBars;
-      if (aggregationFactor > 1) {
-        bars = aggregateCandles(rawBars, aggregationFactor);
-      } else if (isCalendarAggregation) {
-        bars = aggregateCandlesByCalendarDays(rawBars, calendarDays);
-      }
-
-      // ZERO-FABRICATION: if no real candles exist, skip this symbol's indicators
-      // — do not generate synthetic candles under any circumstances
-      const closes = bars.map(b => Number(b.close));
-      const volumes = bars.map(b => Number(b.volume || 0));
-      const currentPrice: number | null = bars.length > 0 ? Number(bars[bars.length - 1].close) : null;
-
-      // RSI — computed from real data only
-      let rsi: number | null = null;
-      if (closes.length >= 15) {
-        const rsiArr = calculateRSI(closes, 14);
-        const lastRsi = rsiArr[rsiArr.length - 1];
-        rsi = (lastRsi !== undefined && !isNaN(lastRsi)) ? lastRsi : null;
-      }
-
-      // EMA — computed from real data only
-      const calcEma = (period: number): number | null => {
-        if (closes.length >= period) {
-          const arr = calculateEMA(closes, period);
-          const v = arr[arr.length - 1];
-          return (v !== undefined && !isNaN(v)) ? v : null;
-        }
-        return null;
-      };
-      const ema9 = calcEma(9);
-      const ema21 = calcEma(21) ?? calcEma(20);
-      const ema50 = calcEma(50);
-      const ema100 = calcEma(100);
-      const ema200 = calcEma(200);
-
-      // MACD — computed from real data only
-      let macdLine: number | null = null;
-      let macdSignal: number | null = null;
-      let macdHistogram: number | null = null;
-      if (closes.length >= 35) {
-        const macdRes = calculateMACD(closes);
-        const ml = macdRes.macdLine[macdRes.macdLine.length - 1];
-        const ms = macdRes.signalLine[macdRes.signalLine.length - 1];
-        const mh = macdRes.histogram[macdRes.histogram.length - 1];
-        macdLine = (ml !== undefined && !isNaN(ml)) ? ml : null;
-        macdSignal = (ms !== undefined && !isNaN(ms)) ? ms : null;
-        macdHistogram = (mh !== undefined && !isNaN(mh)) ? mh : null;
-      }
-
-      // Bollinger Bands — computed from real data only
-      let bbMiddle: number | null = null;
-      let bbUpper: number | null = null;
-      let bbLower: number | null = null;
-      if (closes.length >= 20) {
-        const bbRes = calculateBollingerBands(closes);
-        const bbm = bbRes.middle[bbRes.middle.length - 1];
-        const bbu = bbRes.upper[bbRes.upper.length - 1];
-        const bbl = bbRes.lower[bbRes.lower.length - 1];
-        bbMiddle = (bbm !== undefined && !isNaN(bbm)) ? bbm : null;
-        bbUpper = (bbu !== undefined && !isNaN(bbu)) ? bbu : null;
-        bbLower = (bbl !== undefined && !isNaN(bbl)) ? bbl : null;
-      }
-
-      // Volume Analytics — computed from real data only
-      let avgVol: number | null = bars.length > 0 ? Number(bars[bars.length - 1].volume || 0) : null;
-      let volumeSpike = false;
-      let volMultiplier: number | null = null;
-      if (volumes.length >= 20) {
-        const smaVol = calculateSMA(volumes, 20);
-        const lastSmaVol = smaVol[smaVol.length - 1];
-        if (lastSmaVol > 0) {
-          volMultiplier = Number((volumes[volumes.length - 1] / lastSmaVol).toFixed(2));
-          volumeSpike = volumes[volumes.length - 1] >= lastSmaVol * 2.0;
-        }
-      }
-
-      // Breakouts — computed from real data only
-      let breakoutDetected = false;
-      let breakoutType: string | null = null;
-      if (bars.length >= 21) {
-        const lookbackBars = bars.slice(-21);
-        const window = lookbackBars.slice(0, 20);
-        const current = lookbackBars[20];
-        const highestHigh = Math.max(...window.map(b => Number(b.high)));
-        const lowestLow = Math.min(...window.map(b => Number(b.low)));
-        if (Number(current.close) > highestHigh) {
-          breakoutDetected = true;
-          breakoutType = 'resistance';
-        } else if (Number(current.close) < lowestLow) {
-          breakoutDetected = true;
-          breakoutType = 'support';
-        }
-      }
-
-      const sectorInfo = getNicheSectorAndIndustry(symbol, company.name || '');
-
-      // Match real-time corporate action or news catalyst
-      const filing = filingsSymbolMap.get(symbol);
-      const newsItem = newsSymbolMap.get(symbol);
-      let catalyst = null;
-
-      if (filing) {
-        catalyst = {
-          type: 'filing',
-          reason: `${filing.category}: ${filing.subject.slice(0, 75)}${filing.subject.length > 75 ? '...' : ''}`,
-          title: filing.subject,
-          date: filing.broadcastDate.toISOString()
-        };
-      } else if (newsItem) {
-        catalyst = {
-          type: 'news',
-          reason: `${newsItem.title.slice(0, 80)}${newsItem.title.length > 80 ? '...' : ''}`,
-          title: newsItem.title,
-          date: newsItem.pubDate.toISOString()
-        };
-      }
-
-      // Persistent catalyst memory detection & persistence
-      const rememberedData = rememberedMap.get(symbol);
-      let isRemembered = !!rememberedData;
-
-      if (catalyst && volMultiplier !== null && (volMultiplier >= 2.0 || volumeSpike)) {
-        const memoryKey = `screener:remembered:${symbol}`;
-        const dayChangePercent = closes.length >= 2
-          ? ((closes[closes.length - 1] - closes[closes.length - 2]) / closes[closes.length - 2]) * 100
-          : 0;
-        const memoryPayload = {
-          symbol,
-          companyName: company.name,
-          catalyst,
-          volMultiplier,
-          price: currentPrice,
-          changePercent: dayChangePercent,
-          timestamp: new Date().toISOString(),
-          reason: `[Significant Surge] ${catalyst.reason} with ${volMultiplier.toFixed(1)}x Volume Spike!`
-        };
-        redis.set(memoryKey, JSON.stringify(memoryPayload), 'EX', 86400).catch(err => {
-          console.error(`Failed to store catalyst memory for ${symbol}:`, err);
-        });
-        rememberedMap.set(symbol, memoryPayload);
-        isRemembered = true;
-      }
-
-      // Restore remembered catalyst from cache if no fresh exchange catalyst
-      if (!catalyst && rememberedData) {
-        catalyst = rememberedData.catalyst;
-      }
-
-      return {
-        symbol,
-        timeframe,
-        timestamp: bars.length > 0 ? bars[bars.length - 1].bucketStart.toISOString() : now.toISOString(),
-        rsi14: rsi,
-        macdLine,
-        macdSignal,
-        macdHistogram,
-        bbUpper,
-        bbMiddle,
-        bbLower,
-        ema9,
-        ema21,
-        ema50,
-        ema100,
-        ema200,
-        vwap: null,       // ZERO-FABRICATION: requires tick data — null when unavailable
-        atr14: null,      // ZERO-FABRICATION: requires ATR from real candles — null when insufficient
-        relativeStrength: null, // ZERO-FABRICATION: requires index comparison — null when unavailable
-        volumeSma20: avgVol,
-        volumeSpike,
-        volMultiplier,
-        breakoutDetected,
-        breakoutType,
-        companyName: company.name,
-        sector: sectorInfo.sector,
-        industry: sectorInfo.industry,
-        marketCap: company.marketCap ?? null,
-        catalyst,
-        remembered: isRemembered,
-        rememberedReason: rememberedMap.get(symbol)?.reason || (rememberedData ? rememberedData.reason : null),
-      };
-    });
-
-    // Sort merged rows so that active technical set-ups appear first
-    mergedRows.sort((a, b) => {
-      // 1. Remembered / Catalyst stocks first
-      const aHasCatalyst = a.remembered || a.catalyst ? 1 : 0;
-      const bHasCatalyst = b.remembered || b.catalyst ? 1 : 0;
-      if (aHasCatalyst !== bHasCatalyst) return bHasCatalyst - aHasCatalyst;
-
-      // 2. Active breakout detected next
-      const aBreakout = a.breakoutDetected ? 1 : 0;
-      const bBreakout = b.breakoutDetected ? 1 : 0;
-      if (aBreakout !== bBreakout) return bBreakout - aBreakout;
-
-      // 3. Sort by volume multiplier descending (highest volume surges first)
-      const aVol = a.volMultiplier ?? 0;
-      const bVol = b.volMultiplier ?? 0;
-      if (Math.abs(aVol - bVol) > 0.01) return bVol - aVol;
-
-      // 4. Default to market cap descending
-      const aCap = a.marketCap ?? 0;
-      const bCap = b.marketCap ?? 0;
-      return bCap - aCap;
-    });
-
-    const responseData = {
-      ok: true,
-      data: mergedRows,
-      remembered: Array.from(rememberedMap.values()),
-      meta: {
-        count: mergedRows.length,
-        timeframe: queryTimeframe,
-        requestedTimeframe: timeframe,
-        engine: 'High-Fidelity Dynamic Timeframe In-Memory Ingestion Engine'
-      }
-    };
-
-    // Cache results for 12 hours for speed optimization
+    // Cold start calculation
+    const responseData = await computeScanData(timeframe);
+    
+    // Save to Redis
     try {
       await redis.set(cacheKey, JSON.stringify(responseData), 'EX', 43200);
     } catch (e) {}

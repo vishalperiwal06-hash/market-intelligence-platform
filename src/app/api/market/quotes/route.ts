@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { companies } from '@/lib/db/schema';
 import { nseDataService } from '@/server/nse/nselib-service';
 import { redis } from '@/lib/redis';
-import { eq } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,19 +12,41 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const limit = Math.min(parseInt(searchParams.get('limit') || '200', 10), 4000);
 
-    // Fetch all active companies from PostgreSQL
+    // Fetch active companies
     const dbCompanies = await db.select({ 
       symbol: companies.symbol, 
       name: companies.name, 
-      sector: companies.sector 
+      sector: companies.sector,
+      marketCap: companies.marketCap
     })
       .from(companies)
       .where(eq(companies.isActive, true));
 
-    const symbols = dbCompanies
+    // Curated top active liquid Indian stocks to ensure they are prioritised first
+    const curatedActiveSymbols = [
+      'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK',
+      'LT', 'BAJFINANCE', 'ASIANPAINT', 'AXISBANK', 'MARUTI', 'HCLTECH', 'WIPRO', 'TITAN', 'SUNPHARMA', 'ULTRACEMCO',
+      'TECHM', 'BAJAJFINSV', 'POWERGRID', 'NTPC', 'ONGC', 'M&M', 'JSWSTEEL', 'TATAMOTORS', 'TATASTEEL', 'ADANIENT',
+      'ADANIPORTS', 'ADANIPOWER', 'ADANIGREEN', 'COALINDIA', 'DIVISLAB', 'DRREDDY', 'CIPLA', 'BPCL', 'HEROMOTOCO', 'GRASIM',
+      'APOLLOHOSP', 'TATACONSUM', 'EICHERMOT', 'INDUSINDBK', 'NESTLEIND', 'BRITANNIA', 'SHREECEM', 'HINDALCO', 'HAL', 'BEL',
+      'TRENT', 'MCX', 'ZOMATO', 'DMART', 'PNB', 'BANKBARODA', 'IOC', 'IRFC', 'RVNL', 'IREDA', 'PFC',
+      'REC', 'YESBANK', 'IDFCFIRSTB', 'BANDHANBNK', 'LICI', 'VEDL', 'TVSMOTOR', 'ASHOKLEY', 'DABUR', 'MARICO',
+      'COLPAL', 'POLYCAB', 'HAVELLS', 'SUZLON', 'JIOFIN', 'AWFIS', 'TATACOMM', 'IDEA', 'GAIL', 'SAIL',
+      'NHPC', 'NMDC', 'IRCTC', 'UNIONBANK', 'CANBK', 'OBEROIRLTY', 'DLF', 'PRESTIGE', 'NYKAA', 'PAYTM', 'MUTHOOTFIN',
+      'TATAELXSI', 'PERSISTENT', 'COFORGE', 'KPITTECH', 'DIXON', 'KAYNES', 'IRCON', 'RAILTEL', 'SJVN', 'GENUSPOWER',
+      'MAZDOCK', 'COCHINSHIP', 'GRSE', 'BEML', 'HUDCO', 'NBCC', 'GMRINFRA', 'JINDALSTEL', 'HINDZINC',
+      'NATIONALUM', 'TATACHEM', 'DEEPAKCTR', 'AARTIIND', 'SRF', 'PEL', 'MANAPPURAM', 'LICHSGFIN', 'IBULHSGFIN', 'INDIANB', 'BOB'
+    ];
+
+    const dbSymbols = dbCompanies
       .map(c => c.symbol?.toUpperCase().trim())
-      .filter((sym): sym is string => !!sym && sym.length <= 15 && /^[A-Z0-9&-]+$/.test(sym))
-      .slice(0, limit);
+      .filter((sym): sym is string => !!sym && sym.length <= 15 && /^[A-Z0-9&-]+$/.test(sym));
+
+    // Combine symbols putting the highly active liquid ones first
+    const symbols = [
+      ...curatedActiveSymbols,
+      ...dbSymbols.filter(sym => !curatedActiveSymbols.includes(sym))
+    ].slice(0, limit);
 
     if (symbols.length === 0) {
       return NextResponse.json({
@@ -35,9 +57,9 @@ export async function GET(request: Request) {
     }
 
     // Build a name/sector lookup from DB for enrichment
-    const companyLookup = new Map<string, { name: string; sector: string | null }>();
+    const companyLookup = new Map<string, { name: string; sector: string | null; marketCap: number | null }>();
     for (const c of dbCompanies) {
-      if (c.symbol) companyLookup.set(c.symbol.toUpperCase().trim(), { name: c.name, sector: c.sector });
+      if (c.symbol) companyLookup.set(c.symbol.toUpperCase().trim(), { name: c.name, sector: c.sector, marketCap: c.marketCap });
     }
 
     let quotes: any[] = [];
@@ -143,7 +165,7 @@ export async function GET(request: Request) {
             const info = companyLookup.get(originalSym);
             quotes.push({
               symbol: originalSym,
-              name: info?.name || originalSym,
+              name: yq.longName || info?.name || originalSym,
               sector: info?.sector || null,
               price: yq.regularMarketPrice || null,
               change: yq.regularMarketChange || 0,
@@ -157,6 +179,14 @@ export async function GET(request: Request) {
               exchange: yq.symbol.endsWith('.NS') ? 'NSE' : yq.symbol.endsWith('.BO') ? 'BSE' : 'NSE',
               timestamp: new Date().toISOString(),
               source: 'yahoo-direct-fallback',
+              // Financial Data Enrichment
+              marketCap: yq.marketCap || info?.marketCap || null,
+              peRatio: yq.trailingPE || null,
+              eps: yq.epsTrailingTwelveMonths || null,
+              priceToBook: yq.priceToBook || null,
+              fiftyTwoWeekHigh: yq.fiftyTwoWeekHigh || null,
+              fiftyTwoWeekLow: yq.fiftyTwoWeekLow || null,
+              dividendYield: yq.dividendYield || null,
             });
           }
           if (quotes.length > 0) {
@@ -188,6 +218,14 @@ export async function GET(request: Request) {
           exchange: 'NSE',
           timestamp: new Date().toISOString(),
           source: 'database-only',
+          // Financial defaults
+          marketCap: info?.marketCap || null,
+          peRatio: null,
+          eps: null,
+          priceToBook: null,
+          fiftyTwoWeekHigh: null,
+          fiftyTwoWeekLow: null,
+          dividendYield: null,
         };
       });
       source = 'database-only';
