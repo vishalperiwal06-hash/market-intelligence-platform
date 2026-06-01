@@ -53,7 +53,7 @@ export interface NseFilingRecord {
 }
 
 const DEFAULT_BASE_URL = process.env.NSE_DATA_SERVICE_URL || 'http://localhost:8000';
-const REQUEST_TIMEOUT_MS = Number(process.env.NSE_DATA_SERVICE_TIMEOUT_MS || 8000);
+const REQUEST_TIMEOUT_MS = Number(process.env.NSE_DATA_SERVICE_TIMEOUT_MS || 3000);
 
 class NseDataServiceClient {
   private baseUrl: string;

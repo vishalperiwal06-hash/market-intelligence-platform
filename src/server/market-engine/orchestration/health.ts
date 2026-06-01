@@ -26,7 +26,7 @@ export class ProviderHealthEngine {
   private stats = new Map<string, HealthStats>();
   
   // Config
-  private readonly ERROR_THRESHOLD = 5; // Failures before trip
+  private readonly ERROR_THRESHOLD = 3; // Failures before trip (reduced for fast Yahoo failover)
 
   initProvider(name: string) {
     if (!this.stats.has(name)) {
