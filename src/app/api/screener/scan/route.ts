@@ -311,6 +311,7 @@ function getNicheSectorAndIndustry(symbol: string, companyName: string): { secto
 // MAIN SCAN API ROUTE
 // ──────────────────────────────────────────────
 export async function GET(request: NextRequest) {
+  const now = new Date();
   try {
     const { searchParams } = new URL(request.url);
     const timeframe = searchParams.get('timeframe') || '1d';
@@ -359,6 +360,19 @@ export async function GET(request: NextRequest) {
       calendarDays = 365;
     }
 
+    // Curated Nifty 100/Highly active symbols
+    const curatedActiveSymbols = [
+      'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK',
+      'LT', 'BAJFINANCE', 'ASIANPAINT', 'AXISBANK', 'MARUTI', 'HCLTECH', 'WIPRO', 'TITAN', 'SUNPHARMA', 'ULTRACEMCO',
+      'TECHM', 'BAJAJFINSV', 'POWERGRID', 'NTPC', 'ONGC', 'M&M', 'JSWSTEEL', 'TATAMOTORS', 'TATASTEEL', 'ADANIENT',
+      'ADANIPORTS', 'ADANIPOWER', 'ADANIGREEN', 'COALINDIA', 'DIVISLAB', 'DRREDDY', 'CIPLA', 'BPCL', 'HEROMOTOCO', 'GRASIM',
+      'APOLLOHOSP', 'TATACONSUM', 'EICHERMOT', 'INDUSINDBK', 'NESTLEIND', 'BRITANNIA', 'SHREECEM', 'HINDALCO', 'HAL', 'BEL',
+      'TRENT', 'MCX', 'ZOMATO', 'DMART', 'PNB', 'BANKBARODA', 'IOC', 'IRFC', 'RVNL', 'IREDA', 'PFC',
+      'REC', 'YESBANK', 'IDFCFIRSTB', 'BANDHANBNK', 'LICI', 'VEDL', 'TVSMOTOR', 'ASHOKLEY', 'DABUR', 'MARICO',
+      'COLPAL', 'POLYCAB', 'HAVELLS', 'SUZLON', 'JIOFIN', 'AWFIS', 'TATACOMM', 'IDEA', 'GAIL', 'SAIL',
+      'NHPC', 'NMDC', 'IRCTC', 'UNIONBANK', 'CANBK', 'OBEROIRLTY', 'DLF', 'PRESTIGE', 'NYKAA', 'PAYTM', 'MUTHOOTFIN'
+    ];
+
     // Fetch active companies first to construct active symbols filter
     const dbCompanies = await db.select({
       symbol: companies.symbol,
@@ -370,78 +384,98 @@ export async function GET(request: NextRequest) {
     .from(companies)
     .where(eq(companies.isActive, true));
 
-    const activeSymbols = dbCompanies.map(c => c.symbol.toUpperCase().trim());
+    const companyLookup = new Map<string, typeof dbCompanies[0]>();
+    for (const c of dbCompanies) {
+      companyLookup.set(c.symbol.toUpperCase().trim(), c);
+    }
 
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    // Fetch candles, filings, and news in parallel to optimize speed
-    let candlesList: any[] = [];
-    let recentFilings: any[] = [];
-    let recentNews: any[] = [];
+    // Fetch filings and news in parallel
+    const [filingsRes, newsRes] = await Promise.all([
+      db.select({
+        symbol: corporateFilings.symbol,
+        category: corporateFilings.category,
+        subject: corporateFilings.subject,
+        broadcastDate: corporateFilings.broadcastDate,
+      })
+      .from(corporateFilings)
+      .where(gte(corporateFilings.broadcastDate, oneDayAgo)),
 
-    if (activeSymbols.length > 0) {
-      const [candlesRes, filingsRes, newsRes] = await Promise.all([
-        db.select({
-          symbol: ohlcCandles.symbol,
-          open: ohlcCandles.open,
-          high: ohlcCandles.high,
-          low: ohlcCandles.low,
-          close: ohlcCandles.close,
-          volume: ohlcCandles.volume,
-          turnover: ohlcCandles.turnover,
-          bucketStart: ohlcCandles.bucketStart,
-        })
-        .from(ohlcCandles)
-        .where(
-          and(
-            eq(ohlcCandles.timeframe, queryTimeframe),
-            inArray(ohlcCandles.symbol, activeSymbols)
-          )
-        )
-        .orderBy(asc(ohlcCandles.bucketStart)),
+      db.select({
+        title: newsArticles.title,
+        symbols: newsArticles.symbols,
+        pubDate: newsArticles.pubDate,
+      })
+      .from(newsArticles)
+      .where(gte(newsArticles.pubDate, oneDayAgo))
+    ]);
 
-        db.select({
-          symbol: corporateFilings.symbol,
-          category: corporateFilings.category,
-          subject: corporateFilings.subject,
-          broadcastDate: corporateFilings.broadcastDate,
-        })
-        .from(corporateFilings)
-        .where(gte(corporateFilings.broadcastDate, oneDayAgo)),
+    const recentFilings = filingsRes;
+    const recentNews = newsRes;
 
-        db.select({
-          title: newsArticles.title,
-          symbols: newsArticles.symbols,
-          pubDate: newsArticles.pubDate,
-        })
-        .from(newsArticles)
-        .where(gte(newsArticles.pubDate, oneDayAgo))
-      ]);
+    // Direct Yahoo Finance chart fetch in parallel batches of 20
+    const { default: YahooFinance } = await import('yahoo-finance2');
+    const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
-      candlesList = candlesRes;
-      recentFilings = filingsRes;
-      recentNews = newsRes;
+    const yahooInterval: '5m' | '15m' | '1h' | '1d' = 
+      queryTimeframe === '5m' ? '5m' :
+      queryTimeframe === '15m' ? '15m' :
+      queryTimeframe === '1h' ? '1h' : '1d';
+
+    let lookbackDays = 180;
+    if (yahooInterval === '5m') lookbackDays = 4;
+    else if (yahooInterval === '15m') lookbackDays = 10;
+    else if (yahooInterval === '1h') lookbackDays = 30;
+
+    const today = new Date();
+    const period1Date = new Date();
+    period1Date.setDate(today.getDate() - lookbackDays);
+    const period1 = period1Date.toISOString().split('T')[0];
+    const period2 = today.toISOString().split('T')[0];
+
+    const symbolCandlesMap = new Map<string, any[]>();
+    const batchSize = 20;
+
+    for (let i = 0; i < curatedActiveSymbols.length; i += batchSize) {
+      const batch = curatedActiveSymbols.slice(i, i + batchSize);
+      await Promise.all(batch.map(async (sym) => {
+        try {
+          const results = await yahooFinance.chart(`${sym}.NS`, {
+            period1,
+            period2,
+            interval: yahooInterval,
+          });
+          if (results && results.quotes && results.quotes.length > 0) {
+            const bars = results.quotes
+              .filter((q: any) => q && q.close != null)
+              .map((q: any) => ({
+                symbol: sym,
+                open: q.open,
+                high: q.high,
+                low: q.low,
+                close: q.close,
+                volume: q.volume || 0,
+                turnover: (q.close || 0) * (q.volume || 0),
+                bucketStart: new Date(q.date)
+              }));
+            symbolCandlesMap.set(sym, bars);
+          }
+        } catch (err) {
+          // Ignore failures for individual symbols
+        }
+      }));
     }
 
-    // Group candles by symbol in memory
-    const symbolCandlesMap = new Map<string, any[]>();
-    candlesList.forEach((c) => {
-      const sym = c.symbol.toUpperCase().trim();
-      if (!symbolCandlesMap.has(sym)) {
-        symbolCandlesMap.set(sym, []);
-      }
-      symbolCandlesMap.get(sym)!.push(c);
-    });
-
-    const now = new Date();
-    const currentMinute = Math.floor(now.getTime() / 60000);
-
-    // Filter out dirty spreadsheet header symbols
-    const cleanCompanies = dbCompanies.filter(c => {
-      const sym = c.symbol.toUpperCase().trim();
-      const isValid = /^[A-Z0-9-]{2,15}$/.test(sym);
-      const isHeader = /^(SYMBOL|SERIES|SECURITY|VOLUME|TURNOVER|CLOSE|OPEN|HIGH|LOW|CHANGE|EBITDA|SALES|DATE|% CHANGE|DEPRECIATION)$/.test(sym);
-      return isValid && !isHeader;
+    const cleanCompanies = curatedActiveSymbols.map(sym => {
+      const dbInfo = companyLookup.get(sym);
+      return {
+        symbol: sym,
+        name: dbInfo?.name || sym,
+        sector: dbInfo?.sector || null,
+        industry: dbInfo?.industry || null,
+        marketCap: dbInfo?.marketCap || null,
+      };
     });
 
     // Map recent news by symbol for fast O(1) lookup
@@ -675,6 +709,28 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    // Sort merged rows so that active technical set-ups appear first
+    mergedRows.sort((a, b) => {
+      // 1. Remembered / Catalyst stocks first
+      const aHasCatalyst = a.remembered || a.catalyst ? 1 : 0;
+      const bHasCatalyst = b.remembered || b.catalyst ? 1 : 0;
+      if (aHasCatalyst !== bHasCatalyst) return bHasCatalyst - aHasCatalyst;
+
+      // 2. Active breakout detected next
+      const aBreakout = a.breakoutDetected ? 1 : 0;
+      const bBreakout = b.breakoutDetected ? 1 : 0;
+      if (aBreakout !== bBreakout) return bBreakout - aBreakout;
+
+      // 3. Sort by volume multiplier descending (highest volume surges first)
+      const aVol = a.volMultiplier ?? 0;
+      const bVol = b.volMultiplier ?? 0;
+      if (Math.abs(aVol - bVol) > 0.01) return bVol - aVol;
+
+      // 4. Default to market cap descending
+      const aCap = a.marketCap ?? 0;
+      const bCap = b.marketCap ?? 0;
+      return bCap - aCap;
+    });
 
     const responseData = {
       ok: true,
@@ -688,9 +744,9 @@ export async function GET(request: NextRequest) {
       }
     };
 
-    // Cache results for 30 seconds for speed optimization
+    // Cache results for 12 hours for speed optimization
     try {
-      await redis.set(cacheKey, JSON.stringify(responseData), 'EX', 30);
+      await redis.set(cacheKey, JSON.stringify(responseData), 'EX', 43200);
     } catch (e) {}
 
     return NextResponse.json(responseData);
